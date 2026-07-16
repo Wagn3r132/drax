@@ -32,12 +32,13 @@ COMANDOS (precisam de permissão de administração no servidor)
     -> Define qual canal o Drax usa pra cada função. Fica salvo, e se for o
        canal de Regras ou Registro, o painel já é postado/atualizado ali na hora.
 
-/adicionar-cargo-registro texto_botao:"Gamer" cargo:@Gamer emoji:🎮 estilo:Azul
-    -> Adiciona (ou atualiza) um botão no painel de registro. O painel já
-       existente é atualizado automaticamente, sem precisar reenviar nada.
+/adicionar-cargo-registro nome:"Gamer" cargo:@Gamer emoji:🎮
+    -> Adiciona (ou atualiza) uma linha no painel de registro. Quem reagir com
+       esse emoji na mensagem recebe o cargo automaticamente (e perde o cargo
+       se tirar a reação depois). O painel já existente é atualizado na hora.
 
-/remover-cargo-registro texto_botao:"Gamer"
-    -> Remove um botão do painel de registro (atualiza na hora também).
+/remover-cargo-registro nome:"Gamer"
+    -> Remove uma linha/reação do painel de registro (atualiza na hora também).
 
 /definir-cargo-verificado cargo:@Verificado
     -> Define qual cargo é dado a quem clica em "concordo com as regras".
@@ -47,6 +48,17 @@ COMANDOS (precisam de permissão de administração no servidor)
 
 /painel-registro e /painel-regras
     -> Forçam um novo post manual dos painéis no canal atual (opcional).
+
+--------------------------------------------------------------------------
+PAINEL DE REGISTRO (estilo Carl — reaction roles)
+--------------------------------------------------------------------------
+O painel de registro não usa mais botões: funciona igual ao reaction-role
+clássico do Carl-bot. O Drax posta um embed listando emoji + cargo, e as
+reações aparecem embaixo da mensagem (nativas do Discord). Quem reage ganha
+o cargo, quem tira a reação perde o cargo. Como o Discord só permite 20
+reações diferentes por mensagem, se você cadastrar mais de 20 cargos o Drax
+divide automaticamente em várias mensagens seguidas (parte 1, parte 2...),
+do mesmo jeito que o Carl faz.
 """
 
 import os
@@ -83,11 +95,12 @@ CONFIG_PADRAO = {
     "canal_registro_id": 1527394849953681541,
     "cargo_verificado": "Verificado",
     "cargos_registro": {
-        "Gamer": {"cargo": "Gamer", "emoji": "🎮", "estilo": "primary"},
-        "Artista": {"cargo": "Artista", "emoji": "🎨", "estilo": "secondary"},
-        "Música": {"cargo": "Música", "emoji": "🎵", "estilo": "success"},
-        "Anime": {"cargo": "Anime", "emoji": "🍥", "estilo": "danger"},
+        "Gamer": {"cargo": "Gamer", "emoji": "🎮"},
+        "Artista": {"cargo": "Artista", "emoji": "🎨"},
+        "Música": {"cargo": "Música", "emoji": "🎵"},
+        "Anime": {"cargo": "Anime", "emoji": "🍥"},
     },
+    "mensagens_registro": [],  # IDs das mensagens do painel de registro (uma por "parte")
     "texto_regras": (
         "1️⃣ Respeite todo mundo, sem exceções.\n"
         "2️⃣ Nada de spam, flood ou propaganda sem permissão.\n"
@@ -107,6 +120,7 @@ def carregar_config() -> dict:
             # não quebram uma configuração salva antiga
             cfg = {**CONFIG_PADRAO, **salvo}
             cfg["cargos_registro"] = salvo.get("cargos_registro", CONFIG_PADRAO["cargos_registro"])
+            cfg["mensagens_registro"] = salvo.get("mensagens_registro", [])
             return cfg
         except Exception as e:
             print(f"⚠️ Não consegui ler {ARQUIVO_CONFIG}, usando configuração padrão. Erro: {e}")
@@ -127,13 +141,6 @@ COR_EMBED = 0xFF6A00
 
 logging.basicConfig(level=logging.INFO)
 
-ESTILOS_BOTAO = {
-    "primary": discord.ButtonStyle.primary,
-    "secondary": discord.ButtonStyle.secondary,
-    "success": discord.ButtonStyle.success,
-    "danger": discord.ButtonStyle.danger,
-}
-
 # ============================================================
 # BOT
 # ============================================================
@@ -145,49 +152,99 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 
 # ============================================================
-# BOTÕES E VIEW — painel de registro (auto-cargos)
+# PAINEL DE REGISTRO — estilo Carl (reaction roles)
 # ============================================================
-class BotaoCargo(discord.ui.Button):
-    def __init__(self, texto: str, dados: dict):
-        super().__init__(
-            label=texto,
-            emoji=dados.get("emoji"),
-            style=ESTILOS_BOTAO.get(dados.get("estilo", "secondary"), discord.ButtonStyle.secondary),
-            custom_id=f"drax_registro_{dados['cargo']}",
-        )
-        self.nome_cargo = dados["cargo"]
-
-    async def callback(self, interaction: discord.Interaction):
-        cargo = discord.utils.get(interaction.guild.roles, name=self.nome_cargo)
-        if cargo is None:
-            await interaction.response.send_message(
-                f"🐾 Ops! Não encontrei o cargo **{self.nome_cargo}** no servidor. "
-                f"Peça pra um admin criar um cargo com esse nome exato.",
-                ephemeral=True,
-            )
-            return
-
-        membro = interaction.user
-        if cargo in membro.roles:
-            await membro.remove_roles(cargo, reason="Drax: clicou de novo para remover o cargo")
-            await interaction.response.send_message(
-                f"👋 Beleza, tirei o cargo **{cargo.name}** de você!", ephemeral=True
-            )
-        else:
-            await membro.add_roles(cargo, reason="Drax: registro via painel")
-            await interaction.response.send_message(
-                f"✅ Cargo **{cargo.name}** adicionado! Au au, seja bem-vindo(a)! 🐕🐕🐕",
-                ephemeral=True,
-            )
+MAX_REACOES_POR_MENSAGEM = 20  # limite do Discord pra reações diferentes numa mensagem
 
 
-class PainelRegistro(discord.ui.View):
-    """View persistente com um botão para cada cargo em config['cargos_registro'] (lido na hora)."""
+def dividir_em_blocos(cargos: list, tamanho: int = MAX_REACOES_POR_MENSAGEM) -> list:
+    """Quebra a lista de cargos em blocos de até `tamanho` itens (1 bloco = 1 mensagem)."""
+    return [cargos[i:i + tamanho] for i in range(0, len(cargos), tamanho)] or [[]]
 
-    def __init__(self):
-        super().__init__(timeout=None)
-        for texto, dados in config["cargos_registro"].items():
-            self.add_item(BotaoCargo(texto, dados))
+
+def montar_embed_registro(guild: Optional[discord.Guild], bloco: list, indice: int, total: int) -> discord.Embed:
+    linhas = []
+    for _texto, dados in bloco:
+        cargo_obj = discord.utils.get(guild.roles, name=dados["cargo"]) if guild else None
+        cargo_txt = cargo_obj.mention if cargo_obj else f"@{dados['cargo']}"
+        linhas.append(f"{dados['emoji']}  {cargo_txt}")
+
+    titulo = "🐕🐕🐕 Registro do Drax" + (f" (parte {indice + 1})" if total > 1 else "")
+    intro = (
+        "Oi! Eu sou o **Drax**, seu Cérbero fofo de três cabeças guardando esse servidor!\n\n"
+        "Reaja com o emoji correspondente pra pegar o cargo. Tire a reação pra perder o cargo. Au au! 🐾\n\n"
+        if indice == 0 else ""
+    )
+
+    embed = discord.Embed(
+        title=titulo,
+        description=intro + ("\n".join(linhas) if linhas else "_nenhum cargo configurado ainda_"),
+        color=COR_EMBED,
+    )
+    if total > 1:
+        embed.set_footer(text=f"Parte {indice + 1} de {total} — o Discord só permite 20 reações por mensagem")
+    return embed
+
+
+async def sincronizar_reacoes(mensagem: discord.Message, bloco: list):
+    """Garante que a mensagem tenha exatamente as reações do bloco, na ordem certa,
+    sem apagar as reações de quem já reagiu nos emojis que continuam no painel."""
+    desejadas = [dados["emoji"] for _texto, dados in bloco]
+    atuais = {str(r.emoji): r for r in mensagem.reactions}
+
+    for emoji_str in atuais:
+        if emoji_str not in desejadas:
+            try:
+                await mensagem.clear_reaction(emoji_str)
+            except discord.HTTPException:
+                pass
+
+    for emoji in desejadas:
+        if emoji not in atuais:
+            try:
+                await mensagem.add_reaction(emoji)
+            except discord.HTTPException as e:
+                print(f"⚠️ Não consegui reagir com {emoji}: {e}")
+
+
+async def sincronizar_paineis_registro(canal: Optional[discord.TextChannel], recriar: bool = False):
+    """Cria ou atualiza as mensagens do painel de registro (1 mensagem por bloco de até 20 cargos)."""
+    if canal is None:
+        print("⚠️ Canal de registro não encontrado. Confira o ID configurado (/ver-configuracao) e o acesso do Drax a ele.")
+        return
+
+    blocos = dividir_em_blocos(list(config["cargos_registro"].items()))
+    ids_atuais = [] if recriar else list(config.get("mensagens_registro", []))
+    novas_ids = []
+
+    for indice, bloco in enumerate(blocos):
+        embed = montar_embed_registro(canal.guild, bloco, indice, len(blocos))
+
+        if indice < len(ids_atuais):
+            try:
+                msg = await canal.fetch_message(ids_atuais[indice])
+                await msg.edit(embed=embed)
+                await sincronizar_reacoes(msg, bloco)
+                novas_ids.append(msg.id)
+                continue
+            except discord.NotFound:
+                pass
+
+        msg = await canal.send(embed=embed)
+        await sincronizar_reacoes(msg, bloco)
+        novas_ids.append(msg.id)
+
+    # apaga mensagens antigas que sobraram (ex: cargos foram removidos e agora precisa de menos partes)
+    for id_sobrando in ids_atuais[len(blocos):]:
+        try:
+            msg_antiga = await canal.fetch_message(id_sobrando)
+            await msg_antiga.delete()
+        except discord.NotFound:
+            pass
+
+    config["mensagens_registro"] = novas_ids
+    salvar_config()
+    print(f"🐾 Painel de registro sincronizado em #{canal.name} ({len(novas_ids)} mensagem(ns)).")
 
 
 # ============================================================
@@ -231,19 +288,6 @@ class PainelRegras(discord.ui.View):
 # ============================================================
 # EMBEDS DOS PAINÉIS
 # ============================================================
-def montar_embed_registro() -> discord.Embed:
-    embed = discord.Embed(
-        title="🐕🐕🐕 Registro do Drax",
-        description=(
-            "Oi! Eu sou o **Drax**, seu Cérbero fofo de três cabeças guardando esse servidor!\n\n"
-            "Clica nos botões abaixo pra pegar (ou tirar, clicando de novo) seus cargos. Au au! 🐾"
-        ),
-        color=COR_EMBED,
-    )
-    embed.set_footer(text="Clique de novo no botão para remover o cargo")
-    return embed
-
-
 def montar_embed_regras() -> discord.Embed:
     return discord.Embed(
         title="📜 Regras do Servidor",
@@ -322,6 +366,80 @@ async def on_member_remove(member: discord.Member):
 
 
 # ============================================================
+# EVENTOS — reação no painel de registro (dá/tira cargo, estilo Carl)
+# ============================================================
+def _achar_cargo_pelo_emoji(emoji_str: str) -> Optional[str]:
+    for _texto, dados in config["cargos_registro"].items():
+        if dados["emoji"] == emoji_str:
+            return dados["cargo"]
+    return None
+
+
+@bot.event
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    if payload.message_id not in config.get("mensagens_registro", []):
+        return
+    if payload.user_id == bot.user.id:
+        return
+
+    nome_cargo = _achar_cargo_pelo_emoji(str(payload.emoji))
+    if nome_cargo is None:
+        return
+
+    guild = bot.get_guild(payload.guild_id)
+    if guild is None:
+        return
+    cargo = discord.utils.get(guild.roles, name=nome_cargo)
+    if cargo is None:
+        return
+
+    membro = payload.member
+    if membro is None:
+        try:
+            membro = await guild.fetch_member(payload.user_id)
+        except discord.NotFound:
+            return
+    if membro.bot:
+        return
+
+    try:
+        await membro.add_roles(cargo, reason="Drax: reagiu no painel de registro")
+    except discord.Forbidden:
+        print(f"⚠️ Sem permissão pra dar o cargo {cargo.name} (confira a hierarquia de cargos do Drax).")
+
+
+@bot.event
+async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
+    if payload.message_id not in config.get("mensagens_registro", []):
+        return
+    if payload.user_id == bot.user.id:
+        return
+
+    nome_cargo = _achar_cargo_pelo_emoji(str(payload.emoji))
+    if nome_cargo is None:
+        return
+
+    guild = bot.get_guild(payload.guild_id)
+    if guild is None:
+        return
+    cargo = discord.utils.get(guild.roles, name=nome_cargo)
+    if cargo is None:
+        return
+
+    try:
+        membro = await guild.fetch_member(payload.user_id)
+    except discord.NotFound:
+        return
+    if membro.bot:
+        return
+
+    try:
+        await membro.remove_roles(cargo, reason="Drax: tirou a reação no painel de registro")
+    except discord.Forbidden:
+        print(f"⚠️ Sem permissão pra tirar o cargo {cargo.name} (confira a hierarquia de cargos do Drax).")
+
+
+# ============================================================
 # COMANDOS SLASH — configuração dinâmica (fica salva no volume)
 # ============================================================
 CHAVES_POR_TIPO = {
@@ -349,70 +467,68 @@ async def configurar_canal(interaction: discord.Interaction, tipo: app_commands.
     if tipo.value == "canal_regras_id":
         await atualizar_ou_criar_painel(canal, PainelRegras(), montar_embed_regras())
     elif tipo.value == "canal_registro_id":
-        await atualizar_ou_criar_painel(canal, PainelRegistro(), montar_embed_registro())
+        await sincronizar_paineis_registro(canal)
 
 
 @bot.tree.command(
     name="adicionar-cargo-registro",
-    description="Adiciona (ou atualiza) um botão de cargo no painel de registro",
+    description="Adiciona (ou atualiza) uma reação de cargo no painel de registro",
 )
 @app_commands.describe(
-    texto_botao="Texto que aparece no botão (ex: Gamer)",
-    cargo="Cargo do servidor que será dado/removido ao clicar",
-    emoji="Emoji do botão (opcional, ex: 🎮)",
-    estilo="Cor do botão",
-)
-@app_commands.choices(
-    estilo=[
-        app_commands.Choice(name="Azul", value="primary"),
-        app_commands.Choice(name="Cinza", value="secondary"),
-        app_commands.Choice(name="Verde", value="success"),
-        app_commands.Choice(name="Vermelho", value="danger"),
-    ]
+    nome="Nome de exibição na lista (ex: Gamer)",
+    cargo="Cargo do servidor que será dado/removido ao reagir",
+    emoji="Emoji usado para reagir (ex: 🎮 ou 🔴)",
 )
 @app_commands.checks.has_permissions(manage_roles=True)
 async def adicionar_cargo_registro(
     interaction: discord.Interaction,
-    texto_botao: str,
+    nome: str,
     cargo: discord.Role,
-    emoji: Optional[str] = None,
-    estilo: Optional[app_commands.Choice[str]] = None,
+    emoji: str,
 ):
-    config["cargos_registro"][texto_botao] = {
-        "cargo": cargo.name,
-        "emoji": emoji,
-        "estilo": estilo.value if estilo else "secondary",
-    }
+    for outro_nome, dados in config["cargos_registro"].items():
+        if dados["emoji"] == emoji and outro_nome != nome:
+            await interaction.response.send_message(
+                f"🐾 O emoji {emoji} já tá sendo usado pelo cargo **{outro_nome}**! Escolhe outro emoji.",
+                ephemeral=True,
+            )
+            return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    config["cargos_registro"][nome] = {"cargo": cargo.name, "emoji": emoji}
     salvar_config()
 
-    await interaction.response.send_message(
-        f"✅ Botão **{texto_botao}** ligado ao cargo **{cargo.name}** salvo! "
-        f"O painel de registro já foi atualizado. 🐾",
+    canal_registro = bot.get_channel(config["canal_registro_id"])
+    await sincronizar_paineis_registro(canal_registro)
+
+    await interaction.followup.send(
+        f"✅ **{nome}** ({emoji}) ligado ao cargo **{cargo.name}** salvo! "
+        f"O painel de registro já foi atualizado — reage lá pra testar. 🐾",
         ephemeral=True,
     )
 
-    canal_registro = bot.get_channel(config["canal_registro_id"])
-    await atualizar_ou_criar_painel(canal_registro, PainelRegistro(), montar_embed_registro())
 
-
-@bot.tree.command(name="remover-cargo-registro", description="Remove um botão de cargo do painel de registro")
-@app_commands.describe(texto_botao="Texto exato do botão a remover (igual está no painel)")
+@bot.tree.command(name="remover-cargo-registro", description="Remove uma reação de cargo do painel de registro")
+@app_commands.describe(nome="Nome exato cadastrado (igual aparece em /ver-configuracao)")
 @app_commands.checks.has_permissions(manage_roles=True)
-async def remover_cargo_registro(interaction: discord.Interaction, texto_botao: str):
-    if texto_botao not in config["cargos_registro"]:
+async def remover_cargo_registro(interaction: discord.Interaction, nome: str):
+    if nome not in config["cargos_registro"]:
         await interaction.response.send_message(
-            f"🐾 Não achei nenhum botão chamado **{texto_botao}**. Use /ver-configuracao pra ver os botões atuais.",
+            f"🐾 Não achei nenhum cargo chamado **{nome}** no painel. Use /ver-configuracao pra ver os atuais.",
             ephemeral=True,
         )
         return
 
-    del config["cargos_registro"][texto_botao]
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    del config["cargos_registro"][nome]
     salvar_config()
 
-    await interaction.response.send_message(f"🗑️ Botão **{texto_botao}** removido e já salvo!", ephemeral=True)
-
     canal_registro = bot.get_channel(config["canal_registro_id"])
-    await atualizar_ou_criar_painel(canal_registro, PainelRegistro(), montar_embed_registro())
+    await sincronizar_paineis_registro(canal_registro)
+
+    await interaction.followup.send(f"🗑️ **{nome}** removido do painel e já salvo!", ephemeral=True)
 
 
 @bot.tree.command(name="definir-cargo-verificado", description="Define qual cargo é dado a quem aceita as regras")
@@ -457,7 +573,9 @@ async def ver_configuracao(interaction: discord.Interaction):
 @bot.tree.command(name="painel-registro", description="Força um novo post do painel de registro no canal atual")
 @app_commands.checks.has_permissions(manage_roles=True)
 async def painel_registro(interaction: discord.Interaction):
-    await interaction.response.send_message(embed=montar_embed_registro(), view=PainelRegistro())
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    await sincronizar_paineis_registro(interaction.channel, recriar=True)
+    await interaction.followup.send("🐾 Painel de registro reenviado nesse canal!", ephemeral=True)
 
 
 @bot.tree.command(name="painel-regras", description="Força um novo post do painel de regras no canal atual")
@@ -492,8 +610,8 @@ for _cmd in (
 # ============================================================
 @bot.event
 async def on_ready():
-    # Reregistra as views persistentes (pros botões funcionarem mesmo após reiniciar o bot)
-    bot.add_view(PainelRegistro())
+    # Reregistra a view persistente do painel de regras (pro botão funcionar mesmo após reiniciar o bot)
+    # O painel de registro não precisa disso: reações funcionam sem view/interação registrada.
     bot.add_view(PainelRegras())
 
     try:
@@ -504,9 +622,7 @@ async def on_ready():
 
     # Posta/atualiza os painéis automaticamente nos canais configurados
     await atualizar_ou_criar_painel(bot.get_channel(config["canal_regras_id"]), PainelRegras(), montar_embed_regras())
-    await atualizar_ou_criar_painel(
-        bot.get_channel(config["canal_registro_id"]), PainelRegistro(), montar_embed_registro()
-    )
+    await sincronizar_paineis_registro(bot.get_channel(config["canal_registro_id"]))
 
     await bot.change_presence(
         activity=discord.Activity(type=discord.ActivityType.watching, name="os 3 portões 🐾")
