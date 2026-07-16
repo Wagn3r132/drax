@@ -32,10 +32,11 @@ COMANDOS (precisam de permissão de administração no servidor)
     -> Define qual canal o Drax usa pra cada função. Fica salvo, e se for o
        canal de Regras ou Registro, o painel já é postado/atualizado ali na hora.
 
-/adicionar-cargo-registro nome:"Gamer" cargo:@Gamer emoji:🎮
-    -> Adiciona (ou atualiza) uma linha no painel de registro. Quem reagir com
-       esse emoji na mensagem recebe o cargo automaticamente (e perde o cargo
-       se tirar a reação depois). O painel já existente é atualizado na hora.
+/adicionar-cargo-registro nome:"Gamer" cargo:@Gamer emoji:🎮 grupo:"Diversão"
+    -> Adiciona (ou atualiza) uma linha no painel de registro, dentro da categoria
+       "grupo" (se omitir, cai em "Geral"). Cada categoria vira sua própria mensagem
+       no canal de registro. Quem reagir com esse emoji na mensagem recebe o cargo
+       automaticamente (e perde o cargo se tirar a reação depois).
 
 /remover-cargo-registro nome:"Gamer"
     -> Remove uma linha/reação do painel de registro (atualiza na hora também).
@@ -44,21 +45,28 @@ COMANDOS (precisam de permissão de administração no servidor)
     -> Define qual cargo é dado a quem clica em "concordo com as regras".
 
 /ver-configuracao
-    -> Mostra a configuração atual (canais e cargos salvos).
+    -> Mostra a configuração atual (canais e cargos salvos, agrupados por categoria).
 
 /painel-registro e /painel-regras
     -> Forçam um novo post manual dos painéis no canal atual (opcional).
 
 --------------------------------------------------------------------------
-PAINEL DE REGISTRO (estilo Carl — reaction roles)
+PAINEL DE REGISTRO (estilo Carl — reaction roles, com categorias)
 --------------------------------------------------------------------------
 O painel de registro não usa mais botões: funciona igual ao reaction-role
-clássico do Carl-bot. O Drax posta um embed listando emoji + cargo, e as
-reações aparecem embaixo da mensagem (nativas do Discord). Quem reage ganha
-o cargo, quem tira a reação perde o cargo. Como o Discord só permite 20
-reações diferentes por mensagem, se você cadastrar mais de 20 cargos o Drax
-divide automaticamente em várias mensagens seguidas (parte 1, parte 2...),
-do mesmo jeito que o Carl faz.
+clássico do Carl-bot. O Drax posta um embed por CATEGORIA (grupo) — ex:
+Cores, Verificação, Pings — listando emoji + cargo, com as reações nativas
+do Discord embaixo de cada mensagem. Quem reage ganha o cargo, quem tira a
+reação perde o cargo. Se uma categoria sozinha passar de 20 cargos (limite
+de reações do Discord numa mensagem), ela é dividida em "parte 1", "parte 2"...
+
+O Drax já vem com os cargos de Cores, Verificação e Pings pré-cadastrados
+(iguais aos que já existem no servidor). ATENÇÃO: os nomes dos cargos foram
+copiados exatamente como aparecem na lista de cargos do servidor (incluindo
+o colchete e o emoji no próprio nome, ex: 『❤️』Vermelho) — se algum cargo no
+servidor tiver um nome ligeiramente diferente, o Drax não vai encontrá-lo e
+avisa no console; nesse caso é só rodar /adicionar-cargo-registro de novo
+com o nome certo que ele corrige na hora.
 """
 
 import os
@@ -95,10 +103,34 @@ CONFIG_PADRAO = {
     "canal_registro_id": 1527394849953681541,
     "cargo_verificado": "Verificado",
     "cargos_registro": {
-        "Gamer": {"cargo": "Gamer", "emoji": "🎮"},
-        "Artista": {"cargo": "Artista", "emoji": "🎨"},
-        "Música": {"cargo": "Música", "emoji": "🎵"},
-        "Anime": {"cargo": "Anime", "emoji": "🍥"},
+        # --- Cores ---
+        "Vermelho": {"cargo": "『❤️』Vermelho", "emoji": "❤️", "grupo": "Cores"},
+        "Laranja": {"cargo": "『🧡』Laranja", "emoji": "🧡", "grupo": "Cores"},
+        "Amarelo": {"cargo": "『💛』Amarelo", "emoji": "💛", "grupo": "Cores"},
+        "Verde": {"cargo": "『💚』Verde", "emoji": "💚", "grupo": "Cores"},
+        "Azul": {"cargo": "『💙』Azul", "emoji": "💙", "grupo": "Cores"},
+        "Roxo": {"cargo": "『💜』Roxo", "emoji": "💜", "grupo": "Cores"},
+        "Preto": {"cargo": "『🖤』Preto", "emoji": "🖤", "grupo": "Cores"},
+        "Branco": {"cargo": "『🤍』Branco", "emoji": "🤍", "grupo": "Cores"},
+        # --- Verificação ---
+        "Menino": {"cargo": "『🚹』Menino", "emoji": "🚹", "grupo": "Verificação"},
+        "Menina": {"cargo": "『🚺』Menina", "emoji": "🚺", "grupo": "Verificação"},
+        "-18": {"cargo": "『🧒』-18", "emoji": "🧒", "grupo": "Verificação"},
+        "+18": {"cargo": "『🔞』+18", "emoji": "🔞", "grupo": "Verificação"},
+        "Computador": {"cargo": "『💻』Computador", "emoji": "💻", "grupo": "Verificação"},
+        "Celular": {"cargo": "『📱』Celular", "emoji": "📱", "grupo": "Verificação"},
+        # --- Pings ---
+        "Ping Votação": {"cargo": "『🗳️』Ping Votação", "emoji": "🗳️", "grupo": "Pings"},
+        "Ping Jornal": {"cargo": "『📰』Ping Jornal", "emoji": "📰", "grupo": "Pings"},
+        "Ping Avisos": {"cargo": "『🚨』Ping Avisos", "emoji": "🚨", "grupo": "Pings"},
+        "Ping Parceria": {"cargo": "『🤝』Ping Parceria", "emoji": "🤝", "grupo": "Pings"},
+        "Tweeter": {"cargo": "『🐦』Tweeter", "emoji": "🐦", "grupo": "Pings"},
+        "Instagram": {"cargo": "『📸』Instagram", "emoji": "📸", "grupo": "Pings"},
+        "Twitch": {"cargo": "『👾』Twitch", "emoji": "👾", "grupo": "Pings"},
+        "Videos Novos": {"cargo": "『🎥』Videos Novos", "emoji": "🎥", "grupo": "Pings"},
+        "Fantasma": {"cargo": "『👻』Fantasma", "emoji": "👻", "grupo": "Pings"},
+        "Cadeia": {"cargo": "『⛓️』Cadeia", "emoji": "⛓️", "grupo": "Pings"},
+        "Mute": {"cargo": "『😶』Mute", "emoji": "😶", "grupo": "Pings"},
     },
     "mensagens_registro": [],  # IDs das mensagens do painel de registro (uma por "parte")
     "texto_regras": (
@@ -162,18 +194,38 @@ def dividir_em_blocos(cargos: list, tamanho: int = MAX_REACOES_POR_MENSAGEM) -> 
     return [cargos[i:i + tamanho] for i in range(0, len(cargos), tamanho)] or [[]]
 
 
-def montar_embed_registro(guild: Optional[discord.Guild], bloco: list, indice: int, total: int) -> discord.Embed:
+def agrupar_cargos(cargos: list) -> dict:
+    """Agrupa os cargos por 'grupo' (ex: Cores, Verificação, Pings), preservando a
+    ordem em que foram cadastrados. Cargos sem grupo definido caem em 'Geral'."""
+    grupos: dict = {}
+    for texto, dados in cargos:
+        nome_grupo = dados.get("grupo") or "Geral"
+        grupos.setdefault(nome_grupo, []).append((texto, dados))
+    return grupos
+
+
+def montar_embed_registro(
+    guild: Optional[discord.Guild],
+    nome_grupo: str,
+    bloco: list,
+    indice: int,
+    total: int,
+    mostrar_intro: bool,
+) -> discord.Embed:
     linhas = []
     for _texto, dados in bloco:
         cargo_obj = discord.utils.get(guild.roles, name=dados["cargo"]) if guild else None
+        if guild and cargo_obj is None:
+            print(f"⚠️ Cargo '{dados['cargo']}' não encontrado no servidor '{guild.name}'. "
+                  f"Confira se o nome bate certinho (maiúsculas, espaços, colchetes) ou corrija com /adicionar-cargo-registro.")
         cargo_txt = cargo_obj.mention if cargo_obj else f"@{dados['cargo']}"
         linhas.append(f"{dados['emoji']}  {cargo_txt}")
 
-    titulo = "🐕🐕🐕 Registro do Drax" + (f" (parte {indice + 1})" if total > 1 else "")
+    titulo = f"🐕🐕🐕 {nome_grupo}" + (f" (parte {indice + 1})" if total > 1 else "")
     intro = (
         "Oi! Eu sou o **Drax**, seu Cérbero fofo de três cabeças guardando esse servidor!\n\n"
         "Reaja com o emoji correspondente pra pegar o cargo. Tire a reação pra perder o cargo. Au au! 🐾\n\n"
-        if indice == 0 else ""
+        if mostrar_intro else ""
     )
 
     embed = discord.Embed(
@@ -208,34 +260,42 @@ async def sincronizar_reacoes(mensagem: discord.Message, bloco: list):
 
 
 async def sincronizar_paineis_registro(canal: Optional[discord.TextChannel], recriar: bool = False):
-    """Cria ou atualiza as mensagens do painel de registro (1 mensagem por bloco de até 20 cargos)."""
+    """Cria ou atualiza as mensagens do painel de registro: uma (ou mais, se passar de
+    20 cargos) mensagem por grupo — Cores, Verificação, Pings etc."""
     if canal is None:
         print("⚠️ Canal de registro não encontrado. Confira o ID configurado (/ver-configuracao) e o acesso do Drax a ele.")
         return
 
-    blocos = dividir_em_blocos(list(config["cargos_registro"].items()))
+    grupos = agrupar_cargos(list(config["cargos_registro"].items()))
     ids_atuais = [] if recriar else list(config.get("mensagens_registro", []))
     novas_ids = []
+    cursor = 0
+    primeiro_bloco_geral = True
 
-    for indice, bloco in enumerate(blocos):
-        embed = montar_embed_registro(canal.guild, bloco, indice, len(blocos))
+    for nome_grupo, itens in grupos.items():
+        blocos = dividir_em_blocos(itens)
+        for indice, bloco in enumerate(blocos):
+            embed = montar_embed_registro(canal.guild, nome_grupo, bloco, indice, len(blocos), primeiro_bloco_geral)
+            primeiro_bloco_geral = False
 
-        if indice < len(ids_atuais):
-            try:
-                msg = await canal.fetch_message(ids_atuais[indice])
-                await msg.edit(embed=embed)
-                await sincronizar_reacoes(msg, bloco)
-                novas_ids.append(msg.id)
-                continue
-            except discord.NotFound:
-                pass
+            if cursor < len(ids_atuais):
+                try:
+                    msg = await canal.fetch_message(ids_atuais[cursor])
+                    await msg.edit(embed=embed)
+                    await sincronizar_reacoes(msg, bloco)
+                    novas_ids.append(msg.id)
+                    cursor += 1
+                    continue
+                except discord.NotFound:
+                    pass
 
-        msg = await canal.send(embed=embed)
-        await sincronizar_reacoes(msg, bloco)
-        novas_ids.append(msg.id)
+            msg = await canal.send(embed=embed)
+            await sincronizar_reacoes(msg, bloco)
+            novas_ids.append(msg.id)
+            cursor += 1
 
     # apaga mensagens antigas que sobraram (ex: cargos foram removidos e agora precisa de menos partes)
-    for id_sobrando in ids_atuais[len(blocos):]:
+    for id_sobrando in ids_atuais[cursor:]:
         try:
             msg_antiga = await canal.fetch_message(id_sobrando)
             await msg_antiga.delete()
@@ -244,7 +304,7 @@ async def sincronizar_paineis_registro(canal: Optional[discord.TextChannel], rec
 
     config["mensagens_registro"] = novas_ids
     salvar_config()
-    print(f"🐾 Painel de registro sincronizado em #{canal.name} ({len(novas_ids)} mensagem(ns)).")
+    print(f"🐾 Painel de registro sincronizado em #{canal.name} ({len(novas_ids)} mensagem(ns), {len(grupos)} grupo(s)).")
 
 
 # ============================================================
@@ -478,6 +538,7 @@ async def configurar_canal(interaction: discord.Interaction, tipo: app_commands.
     nome="Nome de exibição na lista (ex: Gamer)",
     cargo="Cargo do servidor que será dado/removido ao reagir",
     emoji="Emoji usado para reagir (ex: 🎮 ou 🔴)",
+    grupo="Categoria do painel (ex: Cores, Verificação, Pings). Cada categoria vira sua própria mensagem",
 )
 @app_commands.checks.has_permissions(manage_roles=True)
 async def adicionar_cargo_registro(
@@ -485,28 +546,31 @@ async def adicionar_cargo_registro(
     nome: str,
     cargo: discord.Role,
     emoji: str,
+    grupo: str = "Geral",
 ):
     for outro_nome, dados in config["cargos_registro"].items():
         if dados["emoji"] == emoji and outro_nome != nome:
             await interaction.response.send_message(
-                f"🐾 O emoji {emoji} já tá sendo usado pelo cargo **{outro_nome}**! Escolhe outro emoji.",
+                f"🐾 O emoji {emoji} já tá sendo usado pelo cargo **{outro_nome}** (grupo **{dados.get('grupo', 'Geral')}**)! "
+                f"Escolhe outro emoji.",
                 ephemeral=True,
             )
             return
 
     await interaction.response.defer(ephemeral=True, thinking=True)
 
-    config["cargos_registro"][nome] = {"cargo": cargo.name, "emoji": emoji}
+    config["cargos_registro"][nome] = {"cargo": cargo.name, "emoji": emoji, "grupo": grupo}
     salvar_config()
 
     canal_registro = bot.get_channel(config["canal_registro_id"])
     await sincronizar_paineis_registro(canal_registro)
 
     await interaction.followup.send(
-        f"✅ **{nome}** ({emoji}) ligado ao cargo **{cargo.name}** salvo! "
+        f"✅ **{nome}** ({emoji}) ligado ao cargo **{cargo.name}** no grupo **{grupo}** salvo! "
         f"O painel de registro já foi atualizado — reage lá pra testar. 🐾",
         ephemeral=True,
     )
+
 
 
 @bot.tree.command(name="remover-cargo-registro", description="Remove uma reação de cargo do painel de registro")
@@ -549,21 +613,21 @@ async def ver_configuracao(interaction: discord.Interaction):
         canal = bot.get_channel(config[chave])
         return canal.mention if canal else f"⚠️ não encontrado (ID {config[chave]})"
 
-    cargos_txt = (
-        "\n".join(
-            f"• **{texto}** → cargo `{dados['cargo']}` {dados.get('emoji') or ''}"
-            for texto, dados in config["cargos_registro"].items()
-        )
-        or "_nenhum cargo configurado_"
-    )
-
     embed = discord.Embed(title="⚙️ Configuração atual do Drax", color=COR_EMBED)
     embed.add_field(name="Boas-vindas", value=fmt_canal("canal_boas_vindas_id"), inline=True)
     embed.add_field(name="Saídas", value=fmt_canal("canal_saidas_id"), inline=True)
     embed.add_field(name="Regras", value=fmt_canal("canal_regras_id"), inline=True)
     embed.add_field(name="Registro", value=fmt_canal("canal_registro_id"), inline=True)
     embed.add_field(name="Cargo de verificado", value=f"`{config['cargo_verificado']}`", inline=True)
-    embed.add_field(name="Cargos do painel de registro", value=cargos_txt, inline=False)
+
+    grupos = agrupar_cargos(list(config["cargos_registro"].items()))
+    if not grupos:
+        embed.add_field(name="Cargos do painel de registro", value="_nenhum cargo configurado_", inline=False)
+    else:
+        for nome_grupo, itens in grupos.items():
+            texto = "\n".join(f"• **{texto}** {dados['emoji']} → `{dados['cargo']}`" for texto, dados in itens)
+            embed.add_field(name=f"📋 {nome_grupo}", value=texto, inline=False)
+
     embed.set_footer(text=f"Arquivo salvo em: {ARQUIVO_CONFIG}")
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
