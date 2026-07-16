@@ -50,6 +50,12 @@ COMANDOS (precisam de permissão de administração no servidor)
 /painel-registro e /painel-regras
     -> Forçam um novo post manual dos painéis no canal atual (opcional).
 
+/criar-cargos
+    -> Cria na hora, se ainda não existirem no servidor, todos os cargos usados
+       no painel de registro e o cargo de verificado. O Drax também faz isso
+       sozinho e automaticamente sempre que o painel é sincronizado ou alguém
+       clica/reage — esse comando é só pra forçar de uma vez, manualmente.
+
 --------------------------------------------------------------------------
 PAINEL DE REGISTRO (estilo Carl — reaction roles, com categorias)
 --------------------------------------------------------------------------
@@ -60,13 +66,14 @@ do Discord embaixo de cada mensagem. Quem reage ganha o cargo, quem tira a
 reação perde o cargo. Se uma categoria sozinha passar de 20 cargos (limite
 de reações do Discord numa mensagem), ela é dividida em "parte 1", "parte 2"...
 
-O Drax já vem com os cargos de Cores, Verificação e Pings pré-cadastrados
-(iguais aos que já existem no servidor). ATENÇÃO: os nomes dos cargos foram
-copiados exatamente como aparecem na lista de cargos do servidor (incluindo
-o colchete e o emoji no próprio nome, ex: 『❤️』Vermelho) — se algum cargo no
-servidor tiver um nome ligeiramente diferente, o Drax não vai encontrá-lo e
-avisa no console; nesse caso é só rodar /adicionar-cargo-registro de novo
-com o nome certo que ele corrige na hora.
+O Drax já vem com os cargos de Cores, Verificação e Pings pré-cadastrados. Se
+algum desses cargos (ou o cargo de verificado) ainda não existir no servidor
+com o nome exato configurado, o Drax CRIA o cargo automaticamente (acontece
+sozinho ao sincronizar o painel, ao clicar/reagir, ou de uma vez com o
+comando /criar-cargos) — não precisa mais criar nada na mão antes. Se preferir
+usar um cargo que já existe mas com nome levemente diferente, é só rodar
+/adicionar-cargo-registro de novo com o nome certo que ele corrige na hora
+(sem duplicar cargo).
 """
 
 import os
@@ -189,6 +196,68 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 MAX_REACOES_POR_MENSAGEM = 20  # limite do Discord pra reações diferentes numa mensagem
 
 
+# ============================================================
+# CRIAÇÃO AUTOMÁTICA DE CARGOS
+# ============================================================
+# Cores sugeridas pros cargos padrão de "Cores" (chave = nome cadastrado em
+# CONFIG_PADRAO, não o texto completo com colchete/emoji do cargo em si).
+CORES_CARGOS_PADRAO = {
+    "Vermelho": discord.Color.red(),
+    "Laranja": discord.Color.orange(),
+    "Amarelo": discord.Color.gold(),
+    "Verde": discord.Color.green(),
+    "Azul": discord.Color.blue(),
+    "Roxo": discord.Color.purple(),
+    "Preto": discord.Color.from_rgb(35, 35, 35),
+    "Branco": discord.Color.from_rgb(245, 245, 245),
+}
+
+
+async def garantir_cargo(
+    guild: discord.Guild,
+    nome_cargo: str,
+    cor: Optional[discord.Color] = None,
+    mentionable: bool = False,
+) -> Optional[discord.Role]:
+    """Procura um cargo pelo nome exato no servidor; se ele não existir, o Drax
+    cria na hora. É por isso que os botões/reações não estavam dando os cargos:
+    se o nome salvo não bate 100% com nenhum cargo do servidor, antes o Drax só
+    desistia em silêncio (ou avisava e não fazia nada)."""
+    cargo = discord.utils.get(guild.roles, name=nome_cargo)
+    if cargo is not None:
+        return cargo
+    try:
+        cargo = await guild.create_role(
+            name=nome_cargo,
+            color=cor or discord.Color.default(),
+            mentionable=mentionable,
+            reason="Drax: cargo criado automaticamente (não existia no servidor)",
+        )
+        print(f"🐾 Cargo '{nome_cargo}' não existia em '{guild.name}' — criei ele automaticamente.")
+        return cargo
+    except discord.Forbidden:
+        print(f"⚠️ Sem permissão pra criar o cargo '{nome_cargo}'. Dê 'Gerenciar Cargos' ao Drax "
+              f"(e confira se o cargo dele está numa posição alta o bastante na hierarquia).")
+        return None
+    except discord.HTTPException as e:
+        print(f"⚠️ Erro ao criar o cargo '{nome_cargo}': {e}")
+        return None
+
+
+async def garantir_todos_cargos_registro(guild: discord.Guild) -> list:
+    """Garante (criando se faltar) todos os cargos usados no painel de registro
+    atual. Retorna a lista de nomes que precisaram ser criados agora."""
+    criados = []
+    for nome, dados in config["cargos_registro"].items():
+        existia = discord.utils.get(guild.roles, name=dados["cargo"]) is not None
+        cor = CORES_CARGOS_PADRAO.get(nome)
+        mencionavel = dados.get("grupo") == "Pings"
+        cargo = await garantir_cargo(guild, dados["cargo"], cor=cor, mentionable=mencionavel)
+        if cargo and not existia:
+            criados.append(dados["cargo"])
+    return criados
+
+
 def dividir_em_blocos(cargos: list, tamanho: int = MAX_REACOES_POR_MENSAGEM) -> list:
     """Quebra a lista de cargos em blocos de até `tamanho` itens (1 bloco = 1 mensagem)."""
     return [cargos[i:i + tamanho] for i in range(0, len(cargos), tamanho)] or [[]]
@@ -266,6 +335,8 @@ async def sincronizar_paineis_registro(canal: Optional[discord.TextChannel], rec
         print("⚠️ Canal de registro não encontrado. Confira o ID configurado (/ver-configuracao) e o acesso do Drax a ele.")
         return
 
+    await garantir_todos_cargos_registro(canal.guild)
+
     grupos = agrupar_cargos(list(config["cargos_registro"].items()))
     ids_atuais = [] if recriar else list(config.get("mensagens_registro", []))
     novas_ids = []
@@ -320,11 +391,12 @@ class BotaoAceitarRegras(discord.ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        cargo = discord.utils.get(interaction.guild.roles, name=config["cargo_verificado"])
+        cargo = await garantir_cargo(interaction.guild, config["cargo_verificado"])
         if cargo is None:
             await interaction.response.send_message(
-                f"🐾 Não achei o cargo **{config['cargo_verificado']}**. "
-                f"Peça pra um admin criar um cargo com esse nome exato.",
+                f"🐾 Não consegui achar nem criar o cargo **{config['cargo_verificado']}**. "
+                f"Confira se o Drax tem a permissão 'Gerenciar Cargos' e se o cargo dele "
+                f"está numa posição alta o suficiente na hierarquia de cargos do servidor.",
                 ephemeral=True,
             )
             return
@@ -449,7 +521,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     guild = bot.get_guild(payload.guild_id)
     if guild is None:
         return
-    cargo = discord.utils.get(guild.roles, name=nome_cargo)
+    cargo = await garantir_cargo(guild, nome_cargo)
     if cargo is None:
         return
 
@@ -648,6 +720,33 @@ async def painel_regras(interaction: discord.Interaction):
     await interaction.response.send_message(embed=montar_embed_regras(), view=PainelRegras())
 
 
+@bot.tree.command(
+    name="criar-cargos",
+    description="Cria (se estiverem faltando) todos os cargos do painel de registro e o cargo de verificado",
+)
+@app_commands.checks.has_permissions(manage_roles=True)
+async def criar_cargos(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    criados = await garantir_todos_cargos_registro(interaction.guild)
+
+    existia_verificado = discord.utils.get(interaction.guild.roles, name=config["cargo_verificado"]) is not None
+    cargo_verificado = await garantir_cargo(interaction.guild, config["cargo_verificado"])
+    if cargo_verificado and not existia_verificado:
+        criados.append(cargo_verificado.name)
+
+    if criados:
+        lista = "\n".join(f"• `{nome}`" for nome in criados)
+        texto = f"🐾 Criei os cargos que ainda faltavam:\n{lista}"
+    else:
+        texto = "🐾 Todos os cargos já existiam, nenhum precisou ser criado."
+
+    canal_registro = bot.get_channel(config["canal_registro_id"])
+    await sincronizar_paineis_registro(canal_registro)
+
+    await interaction.followup.send(texto, ephemeral=True)
+
+
 async def _erro_permissao(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.MissingPermissions):
         await interaction.response.send_message(
@@ -665,6 +764,7 @@ for _cmd in (
     ver_configuracao,
     painel_registro,
     painel_regras,
+    criar_cargos,
 ):
     _cmd.error(_erro_permissao)
 
@@ -684,8 +784,14 @@ async def on_ready():
     except Exception as e:
         print(f"⚠️ Erro ao sincronizar comandos: {e}")
 
+    # Garante que os cargos já existam ANTES de postar os painéis (senão o botão
+    # e as reações não têm o que dar pra quem clicar/reagir)
+    canal_regras = bot.get_channel(config["canal_regras_id"])
+    if canal_regras is not None:
+        await garantir_cargo(canal_regras.guild, config["cargo_verificado"])
+
     # Posta/atualiza os painéis automaticamente nos canais configurados
-    await atualizar_ou_criar_painel(bot.get_channel(config["canal_regras_id"]), PainelRegras(), montar_embed_regras())
+    await atualizar_ou_criar_painel(canal_regras, PainelRegras(), montar_embed_regras())
     await sincronizar_paineis_registro(bot.get_channel(config["canal_registro_id"]))
 
     await bot.change_presence(
