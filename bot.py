@@ -26,6 +26,14 @@ mais. Rodando localmente (sem Railway), ele só salva o arquivo na pasta
 atual mesmo.
 
 --------------------------------------------------------------------------
+ATUALIZAÇÃO AUTOMÁTICA (a cada 1 minuto, sem precisar reiniciar)
+--------------------------------------------------------------------------
+Enquanto o bot estiver rodando (no Railway ou local), ele resincroniza os
+painéis sozinho a cada 1 minuto: recria qualquer cargo que tenha sumido,
+corrige cor de cargo desatualizada e atualiza o texto do embed. Não precisa
+reiniciar/redeploy pra ver isso acontecer — só precisa o processo estar de pé.
+
+--------------------------------------------------------------------------
 COMANDOS (precisam de permissão de administração no servidor)
 --------------------------------------------------------------------------
 /configurar-canal tipo:<Boas-vindas|Saídas|Regras|Registro> canal:#canal
@@ -83,7 +91,7 @@ from pathlib import Path
 from typing import Optional
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 from dotenv import load_dotenv
 
@@ -208,7 +216,11 @@ CORES_CARGOS_PADRAO = {
     "Verde": discord.Color.green(),
     "Azul": discord.Color.blue(),
     "Roxo": discord.Color.purple(),
-    "Preto": discord.Color.from_rgb(35, 35, 35),
+    # Preto "puro" (ou bem escuro) fica INVISÍVEL no tema escuro do Discord —
+    # o texto do nome/menção fica quase-preto em cima de um fundo quase-preto.
+    # Por isso deixamos sem cor customizada: some pro cinza/branco padrão do
+    # tema, que pelo menos é legível.
+    "Preto": discord.Color.default(),
     "Branco": discord.Color.from_rgb(245, 245, 245),
 }
 
@@ -246,14 +258,25 @@ async def garantir_cargo(
 
 async def garantir_todos_cargos_registro(guild: discord.Guild) -> list:
     """Garante (criando se faltar) todos os cargos usados no painel de registro
-    atual. Retorna a lista de nomes que precisaram ser criados agora."""
+    atual, e corrige a cor de cargos que já existem mas ficaram com a cor
+    desatualizada (ex: o Preto que antes era criado quase-invisível). Retorna
+    a lista de nomes que precisaram ser criados agora."""
     criados = []
     for nome, dados in config["cargos_registro"].items():
-        existia = discord.utils.get(guild.roles, name=dados["cargo"]) is not None
+        cargo_existente = discord.utils.get(guild.roles, name=dados["cargo"])
         cor = CORES_CARGOS_PADRAO.get(nome)
         mencionavel = dados.get("grupo") == "Pings"
+
+        if cargo_existente is not None:
+            if cor is not None and cargo_existente.color.value != cor.value:
+                try:
+                    await cargo_existente.edit(color=cor, reason="Drax: corrigindo cor do cargo")
+                except discord.HTTPException:
+                    pass
+            continue
+
         cargo = await garantir_cargo(guild, dados["cargo"], cor=cor, mentionable=mencionavel)
-        if cargo and not existia:
+        if cargo:
             criados.append(dados["cargo"])
     return criados
 
@@ -770,6 +793,27 @@ for _cmd in (
 
 
 # ============================================================
+# ATUALIZAÇÃO AUTOMÁTICA PERIÓDICA (sem precisar reiniciar o bot)
+# ============================================================
+@tasks.loop(minutes=1)
+async def atualizar_paineis_automaticamente():
+    """Roda sozinha a cada 1 minuto, o tempo todo enquanto o bot tiver de pé
+    (não precisa reiniciar/redeploy no Railway pra ver os painéis corrigidos):
+    recria cargo que sumiu, corrige cor errada e atualiza o embed."""
+    canal_regras = bot.get_channel(config["canal_regras_id"])
+    if canal_regras is not None:
+        await garantir_cargo(canal_regras.guild, config["cargo_verificado"])
+        await atualizar_ou_criar_painel(canal_regras, PainelRegras(), montar_embed_regras())
+
+    await sincronizar_paineis_registro(bot.get_channel(config["canal_registro_id"]))
+
+
+@atualizar_paineis_automaticamente.before_loop
+async def antes_de_atualizar_paineis_automaticamente():
+    await bot.wait_until_ready()
+
+
+# ============================================================
 # INICIALIZAÇÃO
 # ============================================================
 @bot.event
@@ -793,6 +837,10 @@ async def on_ready():
     # Posta/atualiza os painéis automaticamente nos canais configurados
     await atualizar_ou_criar_painel(canal_regras, PainelRegras(), montar_embed_regras())
     await sincronizar_paineis_registro(bot.get_channel(config["canal_registro_id"]))
+
+    # A partir daqui, os painéis se resincronizam sozinhos a cada 1 minuto
+    if not atualizar_paineis_automaticamente.is_running():
+        atualizar_paineis_automaticamente.start()
 
     await bot.change_presence(
         activity=discord.Activity(type=discord.ActivityType.watching, name="os 3 portões 🐾")
