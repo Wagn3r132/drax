@@ -87,6 +87,11 @@ COMANDOS (precisam de permissão de administração no servidor)
        se falta permissão "Gerenciar Cargos" ou se o cargo do Drax precisa
        subir na hierarquia.
 
+/diagnostico-armazenamento
+    -> Mostra se o Volume do Railway está mesmo detectado e a config
+       persistindo (sem precisar entrar no site do Railway pra ver os Logs).
+       Use esse comando se os painéis ficarem duplicando a cada restart.
+
 --------------------------------------------------------------------------
 PAINEL DE REGISTRO (estilo Carl — reaction roles, com categorias)
 --------------------------------------------------------------------------
@@ -110,6 +115,7 @@ usar um cargo que já existe mas com nome levemente diferente, é só rodar
 import os
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -868,6 +874,54 @@ async def diagnostico_cargos(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
+@bot.tree.command(
+    name="diagnostico-armazenamento",
+    description="Confere se a configuração do Drax está mesmo sendo salva num Volume persistente do Railway",
+)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def diagnostico_armazenamento(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    caminho_env = os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
+    linhas = []
+
+    if caminho_env:
+        linhas.append(f"✅ Variável `RAILWAY_VOLUME_MOUNT_PATH` detectada: `{caminho_env}`")
+        linhas.append("✅ Um Volume está anexado — a config DEVERIA estar persistindo entre restarts.")
+    else:
+        linhas.append("❌ Variável `RAILWAY_VOLUME_MOUNT_PATH` NÃO detectada.")
+        linhas.append(
+            "❌ Ou seja: a config NÃO é persistente agora — todo redeploy/restart apaga e "
+            "recomeça do zero. É a causa mais provável dos painéis duplicando. Confira em "
+            "**Settings > Volumes** se o Volume está anexado a ESTE serviço específico "
+            "(não a outro serviço do mesmo projeto) e se você reiniciou/redeployou depois "
+            "de criar ele."
+        )
+
+    linhas.append("")
+    linhas.append(f"📄 Arquivo de configuração usado agora: `{ARQUIVO_CONFIG.resolve()}`")
+
+    try:
+        ARQUIVO_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        teste = ARQUIVO_CONFIG.parent / ".drax_teste_escrita"
+        teste.write_text("ok", encoding="utf-8")
+        teste.unlink()
+        linhas.append("✅ Consegui escrever nessa pasta agora mesmo (permissão de escrita ok).")
+    except Exception as e:
+        linhas.append(f"❌ NÃO consegui escrever nessa pasta agora mesmo: {e}")
+
+    if ARQUIVO_CONFIG.exists():
+        modificado = datetime.fromtimestamp(ARQUIVO_CONFIG.stat().st_mtime)
+        linhas.append(f"🕓 Última vez que o arquivo foi salvo: {modificado.strftime('%d/%m/%Y %H:%M:%S')}")
+    else:
+        linhas.append("⚠️ O arquivo de configuração ainda nem existe nesse caminho.")
+
+    embed = discord.Embed(
+        title="🩺 Diagnóstico de armazenamento do Drax", description="\n".join(linhas), color=COR_EMBED
+    )
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
 async def _erro_permissao(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.MissingPermissions):
         await interaction.response.send_message(
@@ -887,6 +941,7 @@ for _cmd in (
     painel_regras,
     criar_cargos,
     diagnostico_cargos,
+    diagnostico_armazenamento,
 ):
     _cmd.error(_erro_permissao)
 
