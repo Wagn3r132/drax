@@ -11,27 +11,43 @@ Uso:
     python drax.py
 
 --------------------------------------------------------------------------
-ARMAZENAMENTO PERSISTENTE (Railway Volume)
---------------------------------------------------------------------------
-O Drax guarda toda a configuração (quais canais usar, quais cargos aparecem
-no painel de registro, qual cargo é dado ao aceitar as regras) num arquivo
-JSON. Isso é necessário porque, sem um Volume, o sistema de arquivos do
-Railway é apagado a cada novo deploy/restart.
-
-Se você já anexou um Volume ao serviço no Railway (Settings > Volumes), ele
-cria SOZINHO a variável de ambiente RAILWAY_VOLUME_MOUNT_PATH apontando pro
-caminho montado (ex: /data). O Drax detecta essa variável automaticamente e
-salva o arquivo de configuração lá dentro — não precisa configurar nada a
-mais. Rodando localmente (sem Railway), ele só salva o arquivo na pasta
-atual mesmo.
-
---------------------------------------------------------------------------
 ATUALIZAÇÃO AUTOMÁTICA (a cada 1 minuto, sem precisar reiniciar)
 --------------------------------------------------------------------------
 Enquanto o bot estiver rodando (no Railway ou local), ele resincroniza os
 painéis sozinho a cada 1 minuto: recria qualquer cargo que tenha sumido,
 corrige cor de cargo desatualizada e atualiza o texto do embed. Não precisa
 reiniciar/redeploy pra ver isso acontecer — só precisa o processo estar de pé.
+
+--------------------------------------------------------------------------
+ARMAZENAMENTO PERSISTENTE (Railway Volume) — PASSO A PASSO
+--------------------------------------------------------------------------
+Sem um Volume, o Railway apaga o sistema de arquivos do serviço a cada novo
+deploy/restart — ou seja, TODA a configuração (canais, cargos do painel, IDs
+das mensagens) some e volta pro padrão de fábrica. É bem provável que seja
+essa a causa de reações que "somem" ou cargos que parecem não aplicar: depois
+de um restart sem volume, o Drax perde o rastro das mensagens antigas do
+painel, posta um painel NOVO, e qualquer reação feita no painel antigo (que
+ainda está lá, visível, mas "morto") não faz mais nada.
+
+Como resolver, direto no site do Railway:
+    1. Abra o projeto no Railway e clique no serviço do bot (o card do Drax).
+    2. Vá na aba "Settings" desse serviço.
+    3. Role até a seção "Volumes" e clique em "+ New Volume" (ou "Add Volume").
+    4. No campo de "Mount Path", digite: /data
+       (pode ser outro caminho, mas /data é o mais comum; não precisa criar a
+       pasta antes, o Railway cuida disso)
+    5. Salve/confirme. O Railway reinicia o serviço sozinho e já cria a
+       variável de ambiente RAILWAY_VOLUME_MOUNT_PATH automaticamente
+       apontando pra esse caminho — não precisa configurar essa variável
+       na mão, o Drax já lê ela sozinho (ver DATA_DIR logo abaixo).
+    6. Depois que o serviço reiniciar com o volume anexado, confira nos
+       "Logs" se a linha de aviso "RAILWAY_VOLUME_MOUNT_PATH não detectado"
+       (que aparece no início deste arquivo) SUMIU. Se sumiu, tá persistente.
+    7. Só então: apague manualmente do canal de registro os painéis
+       duplicados/antigos que sobraram dos restarts anteriores (o bot não
+       sabe que eles existem, então não apaga sozinho), e rode
+       /painel-registro (ou /criar-cargos) uma vez pra postar a versão
+       definitiva, que agora vai ficar salva de verdade.
 
 --------------------------------------------------------------------------
 COMANDOS (precisam de permissão de administração no servidor)
@@ -63,6 +79,13 @@ COMANDOS (precisam de permissão de administração no servidor)
        no painel de registro e o cargo de verificado. O Drax também faz isso
        sozinho e automaticamente sempre que o painel é sincronizado ou alguém
        clica/reage — esse comando é só pra forçar de uma vez, manualmente.
+
+/diagnostico-cargos
+    -> Mostra, cargo por cargo, se ele existe no servidor e se o Drax tem
+       permissão + hierarquia suficiente pra gerenciar ele. Use esse comando
+       se as reações/botão não estiverem dando o cargo — ele aponta certinho
+       se falta permissão "Gerenciar Cargos" ou se o cargo do Drax precisa
+       subir na hierarquia.
 
 --------------------------------------------------------------------------
 PAINEL DE REGISTRO (estilo Carl — reaction roles, com categorias)
@@ -182,6 +205,16 @@ def salvar_config():
 
 
 config = carregar_config()
+
+if not os.getenv("RAILWAY_VOLUME_MOUNT_PATH"):
+    print(
+        "⚠️⚠️⚠️ ATENÇÃO: RAILWAY_VOLUME_MOUNT_PATH não detectado — a configuração "
+        "(canais, cargos do painel, IDs das mensagens) NÃO está persistente agora. "
+        "Qualquer redeploy/restart no Railway apaga esse progresso e o bot posta os "
+        "painéis de novo do zero, deixando as mensagens antigas órfãs no canal (e "
+        "reações feitas nelas param de funcionar). Anexa um Volume ao serviço em "
+        "Settings > Volumes pra resolver isso — passo a passo no topo deste arquivo."
+    )
 
 # Cor lateral dos embeds (tema "fogo do submundo")
 COR_EMBED = 0xFF6A00
@@ -770,6 +803,57 @@ async def criar_cargos(interaction: discord.Interaction):
     await interaction.followup.send(texto, ephemeral=True)
 
 
+@bot.tree.command(
+    name="diagnostico-cargos",
+    description="Mostra se cada cargo existe e se o Drax realmente consegue dar/tirar ele (permissão e hierarquia)",
+)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def diagnostico_cargos(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    guild = interaction.guild
+    bot_membro = guild.me
+    cargo_mais_alto_bot = bot_membro.top_role
+    tem_permissao = bot_membro.guild_permissions.manage_roles
+
+    linhas = [
+        f"{'✅' if tem_permissao else '❌'} Permissão **Gerenciar Cargos**: "
+        + ("concedida" if tem_permissao else "FALTANDO — dê essa permissão ao cargo do Drax"),
+        f"🐾 Cargo mais alto do Drax: **{cargo_mais_alto_bot.name}** (posição {cargo_mais_alto_bot.position})",
+        "",
+    ]
+
+    problemas = {"hierarquia": False}
+
+    def checar(nome_cargo: str) -> str:
+        cargo = discord.utils.get(guild.roles, name=nome_cargo)
+        if cargo is None:
+            return f"❌ `{nome_cargo}` — não existe no servidor"
+        if cargo.position >= cargo_mais_alto_bot.position:
+            problemas["hierarquia"] = True
+            return (
+                f"⚠️ `{nome_cargo}` — existe, mas está ACIMA (ou igual) do cargo do Drax na "
+                f"hierarquia, então ele NÃO consegue dar/tirar esse cargo"
+            )
+        return f"✅ `{nome_cargo}` — existe e o Drax consegue gerenciar"
+
+    linhas.append(f"**Verificado:** {checar(config['cargo_verificado'])}")
+    linhas.append("")
+    linhas.append("**Painel de registro:**")
+    for _nome, dados in config["cargos_registro"].items():
+        linhas.append(checar(dados["cargo"]))
+
+    texto = "\n".join(linhas)
+    if len(texto) > 3900:
+        texto = texto[:3900] + "\n… (lista cortada, muitos cargos — mas o padrão do problema já deve estar claro acima)"
+
+    embed = discord.Embed(title="🩺 Diagnóstico de cargos do Drax", description=texto, color=COR_EMBED)
+    if not tem_permissao or problemas["hierarquia"]:
+        embed.set_footer(text="Dica: em Config. do Servidor > Cargos, arraste o cargo do Drax pra cima de todos os cargos que ele precisa gerenciar.")
+
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
 async def _erro_permissao(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.MissingPermissions):
         await interaction.response.send_message(
@@ -788,6 +872,7 @@ for _cmd in (
     painel_registro,
     painel_regras,
     criar_cargos,
+    diagnostico_cargos,
 ):
     _cmd.error(_erro_permissao)
 
