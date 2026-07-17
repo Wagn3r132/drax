@@ -592,8 +592,15 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
     try:
         await membro.add_roles(cargo, reason="Drax: reagiu no painel de registro")
+        print(f"✅ Cargo '{cargo.name}' dado pra {membro} ({membro.id}).")
     except discord.Forbidden:
-        print(f"⚠️ Sem permissão pra dar o cargo {cargo.name} (confira a hierarquia de cargos do Drax).")
+        print(
+            f"⚠️ SEM PERMISSÃO pra dar o cargo '{cargo.name}' pra {membro}. "
+            f"Rode /diagnostico-cargos no Discord pra confirmar se é permissão 'Gerenciar Cargos' "
+            f"faltando ou hierarquia (cargo do Drax precisa estar ACIMA do '{cargo.name}')."
+        )
+    except discord.HTTPException as e:
+        print(f"⚠️ Erro ao dar o cargo '{cargo.name}' pra {membro}: {e}")
 
 
 @bot.event
@@ -623,8 +630,15 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
 
     try:
         await membro.remove_roles(cargo, reason="Drax: tirou a reação no painel de registro")
+        print(f"✅ Cargo '{cargo.name}' tirado de {membro} ({membro.id}).")
     except discord.Forbidden:
-        print(f"⚠️ Sem permissão pra tirar o cargo {cargo.name} (confira a hierarquia de cargos do Drax).")
+        print(
+            f"⚠️ SEM PERMISSÃO pra tirar o cargo '{cargo.name}' de {membro}. "
+            f"Rode /diagnostico-cargos no Discord pra confirmar se é permissão 'Gerenciar Cargos' "
+            f"faltando ou hierarquia (cargo do Drax precisa estar ACIMA do '{cargo.name}')."
+        )
+    except discord.HTTPException as e:
+        print(f"⚠️ Erro ao tirar o cargo '{cargo.name}' de {membro}: {e}")
 
 
 # ============================================================
