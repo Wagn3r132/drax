@@ -153,7 +153,8 @@ do Discord embaixo de cada mensagem. Quem reage ganha o cargo, quem tira a
 reação perde o cargo. Se uma categoria sozinha passar de 20 cargos (limite
 de reações do Discord numa mensagem), ela é dividida em "parte 1", "parte 2"...
 
-O Drax já vem com os cargos de Cores, Verificação e Pings pré-cadastrados. Se
+O Drax já vem com os cargos de Cores, Verificação, Pings, Personagem Sanrio,
+Gênero, Sexualidade, Aniversário, Gravações e Dispositivo pré-cadastrados. Se
 algum desses cargos (ou o cargo de verificado) ainda não existir no servidor
 com o nome exato configurado, o Drax CRIA o cargo automaticamente (acontece
 sozinho ao sincronizar o painel, ao clicar/reagir, ou de uma vez com o
@@ -226,6 +227,45 @@ CONFIG_PADRAO = {
         "Fantasma": {"cargo": "『👻』Fantasma", "emoji": "👻", "grupo": "Pings"},
         "Cadeia": {"cargo": "『⛓️』Cadeia", "emoji": "⛓️", "grupo": "Pings"},
         "Mute": {"cargo": "『😶』Mute", "emoji": "😶", "grupo": "Pings"},
+        # --- Personagem Sanrio favorito ---
+        "Hello Kitty": {"cargo": "『🎀』Hello Kitty", "emoji": "🎀", "grupo": "Personagem Sanrio"},
+        "Kuromi": {"cargo": "『😈』Kuromi", "emoji": "😈", "grupo": "Personagem Sanrio"},
+        "My Melody": {"cargo": "『🌸』My Melody", "emoji": "🌸", "grupo": "Personagem Sanrio"},
+        "Badtz-maru": {"cargo": "『🐧』Badtz-maru", "emoji": "🐧", "grupo": "Personagem Sanrio"},
+        "Kiki": {"cargo": "『⭐』Kiki", "emoji": "⭐", "grupo": "Personagem Sanrio"},
+        "Lala": {"cargo": "『✨』Lala", "emoji": "✨", "grupo": "Personagem Sanrio"},
+        "Keropi": {"cargo": "『🐸』Keropi", "emoji": "🐸", "grupo": "Personagem Sanrio"},
+        "Pochacco": {"cargo": "『🐶』Pochacco", "emoji": "🐶", "grupo": "Personagem Sanrio"},
+        "Pompompurim": {"cargo": "『🍮』Pompompurim", "emoji": "🍮", "grupo": "Personagem Sanrio"},
+        "Cinamonroll": {"cargo": "『☁️』Cinamonroll", "emoji": "☁️", "grupo": "Personagem Sanrio"},
+        # --- Gênero ---
+        "Gênero Menina": {"cargo": "『👧』Menina", "emoji": "👧", "grupo": "Gênero"},
+        "Gênero Menino": {"cargo": "『👦』Menino", "emoji": "👦", "grupo": "Gênero"},
+        "Gênero Prefiro Não Dizer": {"cargo": "『❔』Prefiro Não Dizer", "emoji": "❔", "grupo": "Gênero"},
+        # --- Sexualidade ---
+        "Hétero": {"cargo": "『👫』Hétero", "emoji": "👫", "grupo": "Sexualidade"},
+        "LGBTQI+": {"cargo": "『🏳️‍🌈』LGBTQI+", "emoji": "🏳️‍🌈", "grupo": "Sexualidade"},
+        "Sexualidade Prefiro Não Dizer": {"cargo": "『❓』Prefiro Não Dizer", "emoji": "❓", "grupo": "Sexualidade"},
+        # --- Aniversário (mês) ---
+        "Janeiro": {"cargo": "『🎆』Janeiro", "emoji": "🎆", "grupo": "Aniversário"},
+        "Fevereiro": {"cargo": "『💘』Fevereiro", "emoji": "💘", "grupo": "Aniversário"},
+        "Março": {"cargo": "『🍀』Março", "emoji": "🍀", "grupo": "Aniversário"},
+        "Abril": {"cargo": "『🐣』Abril", "emoji": "🐣", "grupo": "Aniversário"},
+        "Maio": {"cargo": "『🌷』Maio", "emoji": "🌷", "grupo": "Aniversário"},
+        "Junho": {"cargo": "『🌽』Junho", "emoji": "🌽", "grupo": "Aniversário"},
+        "Julho": {"cargo": "『☀️』Julho", "emoji": "☀️", "grupo": "Aniversário"},
+        "Agosto": {"cargo": "『🎈』Agosto", "emoji": "🎈", "grupo": "Aniversário"},
+        "Setembro": {"cargo": "『🍃』Setembro", "emoji": "🍃", "grupo": "Aniversário"},
+        "Outubro": {"cargo": "『🎃』Outubro", "emoji": "🎃", "grupo": "Aniversário"},
+        "Novembro": {"cargo": "『🍁』Novembro", "emoji": "🍁", "grupo": "Aniversário"},
+        "Dezembro": {"cargo": "『🎄』Dezembro", "emoji": "🎄", "grupo": "Aniversário"},
+        # --- Deseja participar de gravações da comunidade? ---
+        "Participa de Gravações": {"cargo": "『🎬』Participa de Gravações", "emoji": "🎬", "grupo": "Gravações"},
+        "Não Participa de Gravações": {"cargo": "『🚫』Não Participa de Gravações", "emoji": "🚫", "grupo": "Gravações"},
+        # --- Dispositivo que usa para jogar ---
+        "Mobile": {"cargo": "『📱』Mobile", "emoji": "📱", "grupo": "Dispositivo"},
+        "Pc": {"cargo": "『💻』Pc", "emoji": "💻", "grupo": "Dispositivo"},
+        "Console": {"cargo": "『🎮』Console", "emoji": "🎮", "grupo": "Dispositivo"},
     },
     "mensagens_registro": [],  # IDs das mensagens do painel de registro (uma por "parte")
     "texto_regras": (
@@ -323,6 +363,18 @@ CORES_CARGOS_PADRAO = {
     # tema, que pelo menos é legível.
     "Preto": discord.Color.default(),
     "Branco": discord.Color.from_rgb(245, 245, 245),
+    # Cores temáticas dos personagens Sanrio (mesma lógica: chave = nome
+    # cadastrado em CONFIG_PADRAO, não o texto completo do cargo)
+    "Hello Kitty": discord.Color.from_rgb(255, 105, 180),
+    "Kuromi": discord.Color.from_rgb(75, 0, 130),
+    "My Melody": discord.Color.from_rgb(255, 182, 193),
+    "Badtz-maru": discord.Color.dark_grey(),
+    "Kiki": discord.Color.from_rgb(255, 223, 0),
+    "Lala": discord.Color.from_rgb(135, 206, 250),
+    "Keropi": discord.Color.from_rgb(34, 177, 76),
+    "Pochacco": discord.Color.from_rgb(139, 69, 19),
+    "Pompompurim": discord.Color.from_rgb(255, 215, 0),
+    "Cinamonroll": discord.Color.from_rgb(224, 247, 255),
 }
 
 
