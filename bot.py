@@ -486,28 +486,30 @@ async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
     canal_original = bot.get_channel(payload.channel_id)
     canal_txt = canal_original.mention if canal_original else f"`#{payload.channel_id}`"
 
-    embed = discord.Embed(title="🗑️ Mensagem apagada", color=discord.Color.red(), timestamp=discord.utils.utcnow())
-    embed.add_field(name="Canal", value=canal_txt, inline=True)
+    embed = discord.Embed(title="🗑️ Mensagem Apagada", color=discord.Color.red(), timestamp=discord.utils.utcnow())
 
     if msg is not None:
         guild = bot.get_guild(payload.guild_id)
         apagado_por = await _quem_apagou_mensagem(guild, msg.author.id, payload.channel_id)
 
-        embed.set_author(name=str(msg.author), icon_url=msg.author.display_avatar.url)
-        embed.add_field(name="Autor", value=msg.author.mention, inline=True)
-        embed.add_field(name="Apagado por", value=apagado_por, inline=True)
-        embed.add_field(name="Conteúdo", value=_cortar_para_log(msg.content), inline=False)
+        embed.add_field(name="👤 Autor", value=_campo_membro(msg.author), inline=False)
+        embed.add_field(name="📍 Canal", value=canal_txt, inline=True)
+        embed.add_field(name="🧹 Apagado por", value=apagado_por, inline=True)
+        embed.add_field(name="💬 Conteúdo", value=_cortar_para_log(msg.content), inline=False)
         if msg.attachments:
             anexos = "\n".join(f"📎 {a.filename}" for a in msg.attachments)
-            embed.add_field(name="Anexos", value=_cortar_para_log(anexos, 500), inline=False)
-        embed.set_footer(text=f"ID da mensagem: {payload.message_id} • ID do autor: {msg.author.id}")
+            embed.add_field(name="📎 Anexos", value=_cortar_para_log(anexos, 500), inline=False)
+        embed.add_field(name="🆔 ID da mensagem", value=f"`{payload.message_id}`", inline=True)
+        _aplicar_visual_padrao_logs(embed, msg.author)
     else:
+        embed.add_field(name="📍 Canal", value=canal_txt, inline=True)
         embed.add_field(
-            name="Conteúdo",
+            name="💬 Conteúdo",
             value="*(não sei dizer — a mensagem não estava em cache; provavelmente era antiga ou o bot reiniciou depois que ela foi enviada)*",
             inline=False,
         )
-        embed.set_footer(text=f"ID da mensagem: {payload.message_id}")
+        embed.add_field(name="🆔 ID da mensagem", value=f"`{payload.message_id}`", inline=True)
+        embed.set_footer(text=f"{bot.user.name if bot.user else 'Drax'} Logs • {discord.utils.utcnow().strftime('%d/%m/%Y %H:%M')} UTC")
 
     await canal_logs.send(embed=embed)
 
@@ -523,12 +525,9 @@ async def on_raw_bulk_message_delete(payload: discord.RawBulkMessageDeleteEvent)
     canal_original = bot.get_channel(payload.channel_id)
     canal_txt = canal_original.mention if canal_original else f"`#{payload.channel_id}`"
 
-    embed = discord.Embed(
-        title="🧹 Mensagens apagadas em massa",
-        description=f"**{len(payload.message_ids)}** mensagens apagadas de uma vez em {canal_txt}.",
-        color=discord.Color.dark_red(),
-        timestamp=discord.utils.utcnow(),
-    )
+    embed = discord.Embed(title="🧹 Mensagens Apagadas em Massa", color=discord.Color.dark_red(), timestamp=discord.utils.utcnow())
+    embed.add_field(name="📍 Canal", value=canal_txt, inline=True)
+    embed.add_field(name="🔢 Quantidade", value=f"{len(payload.message_ids)} mensagens", inline=True)
 
     mensagens_em_cache = [m for m in payload.cached_messages if not m.author.bot]
     if mensagens_em_cache:
@@ -537,11 +536,15 @@ async def on_raw_bulk_message_delete(payload: discord.RawBulkMessageDeleteEvent)
             contagem[str(m.author)] = contagem.get(str(m.author), 0) + 1
         resumo = "\n".join(f"• {autor}: {qtd}" for autor, qtd in contagem.items())
         embed.add_field(
-            name=f"Autores (de {len(mensagens_em_cache)} mensagens que estavam em cache)",
+            name=f"👥 Autores (de {len(mensagens_em_cache)} em cache)",
             value=_cortar_para_log(resumo, 800),
             inline=False,
         )
 
+    embed.set_footer(
+        text=f"{bot.user.name if bot.user else 'Drax'} Logs • {discord.utils.utcnow().strftime('%d/%m/%Y %H:%M')} UTC",
+        icon_url=bot.user.display_avatar.url if bot.user else None,
+    )
     await canal_logs.send(embed=embed)
 
 
@@ -581,19 +584,23 @@ async def on_raw_message_edit(payload: discord.RawMessageUpdateEvent):
 
     link = f"https://discord.com/channels/{payload.guild_id}/{payload.channel_id}/{payload.message_id}"
 
-    embed = discord.Embed(title="📝 Mensagem editada", color=discord.Color.orange(), timestamp=discord.utils.utcnow())
-    embed.add_field(name="Canal", value=canal_original.mention, inline=True)
+    embed = discord.Embed(title="📝 Mensagem Editada", color=discord.Color.orange(), timestamp=discord.utils.utcnow())
     if autor is not None:
-        embed.set_author(name=str(autor), icon_url=autor.display_avatar.url)
-        embed.add_field(name="Autor", value=autor.mention, inline=True)
+        embed.add_field(name="👤 Autor", value=_campo_membro(autor), inline=False)
+    embed.add_field(name="📍 Canal", value=canal_original.mention, inline=True)
+    embed.add_field(name="🆔 ID da mensagem", value=f"`{payload.message_id}`", inline=True)
     embed.add_field(
-        name="Antes",
+        name="✏️ Antes",
         value=_cortar_para_log(antes.content) if antes is not None else "*(não sei — mensagem não estava em cache)*",
         inline=False,
     )
-    embed.add_field(name="Depois", value=_cortar_para_log(novo_conteudo), inline=False)
-    embed.add_field(name="Link", value=f"[Ir para a mensagem]({link})", inline=False)
-    embed.set_footer(text=f"ID da mensagem: {payload.message_id}")
+    embed.add_field(name="✅ Depois", value=_cortar_para_log(novo_conteudo), inline=False)
+    embed.add_field(name="🔗 Link", value=f"[Ir para a mensagem]({link})", inline=False)
+
+    if autor is not None:
+        _aplicar_visual_padrao_logs(embed, autor)
+    else:
+        embed.set_footer(text=f"{bot.user.name if bot.user else 'Drax'} Logs • {discord.utils.utcnow().strftime('%d/%m/%Y %H:%M')} UTC")
 
     await canal_logs.send(embed=embed)
 
