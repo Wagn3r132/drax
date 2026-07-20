@@ -286,7 +286,16 @@ def carregar_config() -> dict:
             # mescla com o padrão, assim campos novos adicionados no código no futuro
             # não quebram uma configuração salva antiga
             cfg = {**CONFIG_PADRAO, **salvo}
-            cfg["cargos_registro"] = salvo.get("cargos_registro", CONFIG_PADRAO["cargos_registro"])
+            # MESCLA (não substitui): parte de todos os cargos padrão definidos no código
+            # e sobrepõe com o que já estava salvo. Isso faz com que categorias/cargos
+            # novos adicionados no código (ex: uma atualização do Drax) apareçam sozinhos
+            # pra servidores que já tinham uma config salva antiga — sem isso, qualquer
+            # cargo novo cadastrado no CONFIG_PADRAO nunca aparecia no painel de quem já
+            # tinha rodado o bot antes, porque o valor salvo tomava 100% de prioridade.
+            cfg["cargos_registro"] = {
+                **CONFIG_PADRAO["cargos_registro"],
+                **salvo.get("cargos_registro", {}),
+            }
             cfg["mensagens_registro"] = salvo.get("mensagens_registro", [])
             return cfg
         except Exception as e:
