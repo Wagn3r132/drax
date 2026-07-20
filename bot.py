@@ -892,6 +892,25 @@ async def _gerenciar_presenca_para_efeitos(guild: discord.Guild):
             pass
 
 
+def _campo_membro(usuario: discord.abc.User) -> str:
+    """Formata o valor do campo 'Membro' dos logs: menção + ID entre parênteses."""
+    return f"{usuario.mention} (`{usuario.id}`)"
+
+
+def _aplicar_visual_padrao_logs(embed: discord.Embed, usuario: discord.abc.User) -> None:
+    """Aplica o visual padrão dos logs de call: foto do membro como thumbnail
+    (canto superior direito) e rodapé com o nome do bot + data/hora em UTC.
+    O 'Hoje às HH:MM' que aparece do lado do rodapé é acrescentado sozinho pelo
+    Discord por causa do embed.timestamp já definido em cada log — não precisa
+    fazer nada extra pra isso aparecer."""
+    embed.set_thumbnail(url=usuario.display_avatar.url)
+    agora = discord.utils.utcnow()
+    embed.set_footer(
+        text=f"{bot.user.name if bot.user else 'Drax'} Logs • {agora.strftime('%d/%m/%Y %H:%M')} UTC",
+        icon_url=bot.user.display_avatar.url if bot.user else None,
+    )
+
+
 @bot.event
 async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
     if before.channel == after.channel:
@@ -901,37 +920,42 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
         canal_logs = bot.get_channel(CANAL_LOGS_CALL_ID)
         if canal_logs is not None:
             if before.channel is None and after.channel is not None:
-                embed = discord.Embed(title="🔊 Entrou na call", color=discord.Color.green(), timestamp=discord.utils.utcnow())
-                embed.set_author(name=str(member), icon_url=member.display_avatar.url)
-                embed.add_field(name="Membro", value=member.mention, inline=True)
-                embed.add_field(name="Canal", value=after.channel.mention, inline=True)
+                embed = discord.Embed(title="🔊 Entrou na Call", color=discord.Color.green(), timestamp=discord.utils.utcnow())
+                embed.add_field(name="👤 Membro", value=_campo_membro(member), inline=False)
+                embed.add_field(name="🟢 Entrou em", value=f"🔊 · {after.channel.mention}", inline=True)
+                _aplicar_visual_padrao_logs(embed, member)
                 await canal_logs.send(embed=embed)
 
             elif before.channel is not None and after.channel is None:
                 entrada = await _quem_desconectou(member.guild)
                 if entrada is not None:
                     extra = f" (desconectou {entrada.extra.count} pessoa(s) de uma vez)" if entrada.extra.count > 1 else ""
-                    embed = discord.Embed(title="👢 Foi desconectado(a) da call", color=discord.Color.dark_orange(), timestamp=discord.utils.utcnow())
-                    embed.add_field(name="Por", value=f"{entrada.user.mention if entrada.user else 'desconhecido'}{extra}", inline=False)
+                    embed = discord.Embed(title="👢 Foi Desconectado(a) da Call", color=discord.Color.dark_orange(), timestamp=discord.utils.utcnow())
+                    embed.add_field(name="👤 Membro", value=_campo_membro(member), inline=False)
+                    embed.add_field(name="🔴 Saiu de", value=f"🔊 · {before.channel.mention}", inline=True)
+                    embed.add_field(name="👮 Por", value=f"{entrada.user.mention if entrada.user else 'desconhecido'}{extra}", inline=True)
                 else:
-                    embed = discord.Embed(title="🔇 Saiu da call", color=discord.Color.greyple(), timestamp=discord.utils.utcnow())
-                embed.set_author(name=str(member), icon_url=member.display_avatar.url)
-                embed.add_field(name="Membro", value=member.mention, inline=True)
-                embed.add_field(name="Canal", value=before.channel.mention, inline=True)
+                    embed = discord.Embed(title="🔇 Saiu da Call", color=discord.Color.greyple(), timestamp=discord.utils.utcnow())
+                    embed.add_field(name="👤 Membro", value=_campo_membro(member), inline=False)
+                    embed.add_field(name="🔴 Saiu de", value=f"🔊 · {before.channel.mention}", inline=True)
+                _aplicar_visual_padrao_logs(embed, member)
                 await canal_logs.send(embed=embed)
 
             else:  # trocou de canal de voz
                 entrada = await _quem_moveu_para(member.guild, after.channel.id)
                 if entrada is not None:
                     extra = f" (moveu {entrada.extra.count} pessoa(s) de uma vez)" if entrada.extra.count > 1 else ""
-                    embed = discord.Embed(title="🫳 Foi puxado(a) para outra call", color=discord.Color.gold(), timestamp=discord.utils.utcnow())
-                    embed.add_field(name="Por", value=f"{entrada.user.mention if entrada.user else 'desconhecido'}{extra}", inline=False)
+                    embed = discord.Embed(title="🫳 Foi Puxado(a) para Outra Call", color=discord.Color.gold(), timestamp=discord.utils.utcnow())
+                    embed.add_field(name="👤 Membro", value=_campo_membro(member), inline=False)
+                    embed.add_field(name="🔴 Saiu de", value=f"🔊 · {before.channel.mention}", inline=True)
+                    embed.add_field(name="🟢 Entrou em", value=f"🔊 · {after.channel.mention}", inline=True)
+                    embed.add_field(name="👮 Por", value=f"{entrada.user.mention if entrada.user else 'desconhecido'}{extra}", inline=False)
                 else:
-                    embed = discord.Embed(title="🔀 Trocou de call", color=discord.Color.blue(), timestamp=discord.utils.utcnow())
-                embed.set_author(name=str(member), icon_url=member.display_avatar.url)
-                embed.add_field(name="Membro", value=member.mention, inline=True)
-                embed.add_field(name="De", value=before.channel.mention, inline=True)
-                embed.add_field(name="Para", value=after.channel.mention, inline=True)
+                    embed = discord.Embed(title="🔄 Trocou de Call", color=discord.Color.blue(), timestamp=discord.utils.utcnow())
+                    embed.add_field(name="👤 Membro", value=_campo_membro(member), inline=False)
+                    embed.add_field(name="🔴 Saiu de", value=f"🔊 · {before.channel.mention}", inline=True)
+                    embed.add_field(name="🟢 Entrou em", value=f"🔊 · {after.channel.mention}", inline=True)
+                _aplicar_visual_padrao_logs(embed, member)
                 await canal_logs.send(embed=embed)
 
     await _gerenciar_presenca_para_efeitos(member.guild)
@@ -945,19 +969,19 @@ async def on_voice_channel_effect(effect: discord.VoiceChannelEffect):
     if canal_logs is None:
         return
 
-    embed = discord.Embed(title="✨ Usou um efeito na call", color=discord.Color.fuchsia(), timestamp=discord.utils.utcnow())
-    embed.set_author(name=str(effect.user), icon_url=effect.user.display_avatar.url)
-    embed.add_field(name="Membro", value=effect.user.mention, inline=True)
-    embed.add_field(name="Canal", value=effect.channel.mention, inline=True)
+    embed = discord.Embed(title="✨ Usou um Efeito na Call", color=discord.Color.fuchsia(), timestamp=discord.utils.utcnow())
+    embed.add_field(name="👤 Membro", value=_campo_membro(effect.user), inline=False)
+    embed.add_field(name="🔊 Canal", value=effect.channel.mention, inline=True)
 
     if effect.is_sound():
         volume_pct = int((effect.sound.volume or 0) * 100)
-        embed.add_field(name="Tipo", value=f"🔊 Som do soundboard (ID `{effect.sound.id}`, volume {volume_pct}%)", inline=False)
+        embed.add_field(name="🎛️ Tipo", value=f"🔊 Som do soundboard (ID `{effect.sound.id}`, volume {volume_pct}%)", inline=True)
     elif effect.emoji is not None:
-        embed.add_field(name="Tipo", value=f"Reação animada com {effect.emoji}", inline=False)
+        embed.add_field(name="🎛️ Tipo", value=f"Reação animada com {effect.emoji}", inline=True)
     else:
-        embed.add_field(name="Tipo", value="Efeito desconhecido", inline=False)
+        embed.add_field(name="🎛️ Tipo", value="Efeito desconhecido", inline=True)
 
+    _aplicar_visual_padrao_logs(embed, effect.user)
     await canal_logs.send(embed=embed)
 
 
