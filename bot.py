@@ -47,6 +47,21 @@ e CANAL_LOGS_CALL_ID mais abaixo se precisar trocar):
       efeitos registrados — é uma limitação da própria API do Discord.
 
 --------------------------------------------------------------------------
+CANAL-ARMADILHA (anti-invasão / contas comprometidas) (1528867276856492153)
+--------------------------------------------------------------------------
+Canal fixo (também com ID no código — procure por CANAL_ARMADILHA_ID mais
+abaixo se precisar trocar) onde o Drax posta um aviso "não escreva aqui!" e
+fica de olho sozinho. Se QUALQUER pessoa (que não seja bot) mandar mensagem
+nesse canal, o Drax entende que é uma conta comprometida/hackeada — o tipo
+que manda spam em massa em todos os canais do servidor ao mesmo tempo — e:
+    1. Apaga a mensagem na hora.
+    2. Bane a conta automaticamente (precisa da permissão "Banir Membros" pro
+       Drax; sem ela, ele avisa no log que não conseguiu banir).
+    3. Registra tudo no canal de logs de chat (1528866964171260005).
+O painel de aviso se recria/atualiza sozinho junto com os outros painéis
+(a cada 1 minuto e ao ligar o bot) — não precisa postar nada na mão.
+
+--------------------------------------------------------------------------
 ATUALIZAÇÃO AUTOMÁTICA (a cada 1 minuto, sem precisar reiniciar)
 --------------------------------------------------------------------------
 Enquanto o bot estiver rodando (no Railway ou local), ele resincroniza os
@@ -265,6 +280,11 @@ COR_EMBED = 0xFF6A00
 # sem querer). Se precisar trocar, é só editar os números aqui.
 CANAL_LOGS_CHAT_ID = 1528866964171260005
 CANAL_LOGS_CALL_ID = 1528867083000217754
+
+# Canal-armadilha: ninguém deve escrever aqui. Serve pra pegar contas
+# comprometidas/hackeadas, que costumam mandar spam em massa em todos os
+# canais do servidor ao mesmo tempo (também fixo, mesmo motivo dos de cima).
+CANAL_ARMADILHA_ID = 1528867276856492153
 
 logging.basicConfig(level=logging.INFO)
 
@@ -605,6 +625,72 @@ async def on_raw_message_edit(payload: discord.RawMessageUpdateEvent):
     await canal_logs.send(embed=embed)
 
 
+# ============================================================
+# CANAL-ARMADILHA (anti-invasão / contas comprometidas)
+# ============================================================
+async def _acionar_armadilha(message: discord.Message):
+    """Executa quando alguém escreve no canal-armadilha: apaga a mensagem na
+    hora, bane a conta (é o comportamento esperado — só robô de spam/conta
+    hackeada escreveria num canal com aviso pra não escrever) e registra tudo
+    no canal de logs de chat."""
+    autor = message.author
+
+    try:
+        await message.delete()
+    except (discord.Forbidden, discord.NotFound):
+        pass
+
+    baniu = False
+    erro_ban: Optional[str] = None
+    try:
+        await message.guild.ban(
+            autor,
+            reason="Drax: escreveu no canal-armadilha (provável conta comprometida/hackeada)",
+            delete_message_seconds=3600,  # limpa o spam recente dessa conta em todo o servidor
+        )
+        baniu = True
+    except discord.Forbidden:
+        erro_ban = "sem permissão 'Banir Membros' (ou o cargo do Drax tá abaixo do dela na hierarquia)"
+    except discord.HTTPException as e:
+        erro_ban = str(e)
+
+    canal_logs = bot.get_channel(CANAL_LOGS_CHAT_ID)
+    if canal_logs is None:
+        return
+
+    if baniu:
+        embed = discord.Embed(
+            title="🚨 Armadilha Ativada — Conta Banida",
+            description="Rosnei, mordi e bani na hora! 🐕💥 Provavelmente era uma conta comprometida/hackeada mandando spam.",
+            color=discord.Color.dark_red(),
+            timestamp=discord.utils.utcnow(),
+        )
+    else:
+        embed = discord.Embed(
+            title="⚠️ Armadilha Ativada — Não Consegui Banir",
+            description=f"Alguém escreveu no canal-armadilha, mas eu não consegui banir: {erro_ban}",
+            color=discord.Color.orange(),
+            timestamp=discord.utils.utcnow(),
+        )
+    embed.add_field(name="👤 Conta", value=_campo_membro(autor), inline=False)
+    embed.add_field(name="📍 Canal", value=message.channel.mention, inline=True)
+    embed.add_field(name="💬 Mensagem", value=_cortar_para_log(message.content), inline=False)
+    _aplicar_visual_padrao_logs(embed, autor)
+    await canal_logs.send(embed=embed)
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    if message.guild is None or message.author.bot:
+        return
+
+    if message.channel.id == CANAL_ARMADILHA_ID:
+        await _acionar_armadilha(message)
+        return  # essa mensagem nem devia existir — não processa como comando
+
+    await bot.process_commands(message)
+
+
 async def sincronizar_paineis_registro(canal: Optional[discord.TextChannel], recriar: bool = False):
     """Cria ou atualiza as mensagens do painel de registro: uma (ou mais, se passar de
     20 cargos) mensagem por grupo — Cores, Verificação, Pings etc.
@@ -752,6 +838,23 @@ def montar_embed_regras() -> discord.Embed:
         ),
         color=COR_EMBED,
     )
+
+
+def montar_embed_armadilha() -> discord.Embed:
+    embed = discord.Embed(
+        title="🚫 Não escreva neste canal!",
+        description=(
+            "Os membros que mandarem mensagem aqui serão **castigados automaticamente**. 🐾\n\n"
+            "Esse canal funciona como uma armadilha pra farejar contas comprometidas ou "
+            "hackeadas. Normalmente, essas contas mandam mensagens em massa em todos os "
+            "canais do servidor ao mesmo tempo. Se uma delas chegar a escrever aqui, o "
+            "Drax rosna, morde e bane na hora — automaticamente. 🐕💥"
+        ),
+        color=COR_EMBED,
+    )
+    if bot.user is not None:
+        embed.set_thumbnail(url=bot.user.display_avatar.url)
+    return embed
 
 
 async def atualizar_ou_criar_painel(canal: Optional[discord.TextChannel], view: discord.ui.View, embed: discord.Embed):
@@ -1392,6 +1495,8 @@ async def atualizar_paineis_automaticamente():
         await garantir_cargo(canal_regras.guild, config["cargo_verificado"])
         await atualizar_ou_criar_painel(canal_regras, PainelRegras(), montar_embed_regras())
 
+    await atualizar_ou_criar_painel(bot.get_channel(CANAL_ARMADILHA_ID), discord.ui.View(timeout=None), montar_embed_armadilha())
+
     await sincronizar_paineis_registro(bot.get_channel(config["canal_registro_id"]))
 
 
@@ -1423,6 +1528,7 @@ async def on_ready():
 
     # Posta/atualiza os painéis automaticamente nos canais configurados
     await atualizar_ou_criar_painel(canal_regras, PainelRegras(), montar_embed_regras())
+    await atualizar_ou_criar_painel(bot.get_channel(CANAL_ARMADILHA_ID), discord.ui.View(timeout=None), montar_embed_armadilha())
     await sincronizar_paineis_registro(bot.get_channel(config["canal_registro_id"]))
 
     # A partir daqui, os painéis se resincronizam sozinhos a cada 1 minuto
