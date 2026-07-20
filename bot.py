@@ -392,7 +392,13 @@ async def sincronizar_reacoes(mensagem: discord.Message, bloco: list):
 
 async def sincronizar_paineis_registro(canal: Optional[discord.TextChannel], recriar: bool = False):
     """Cria ou atualiza as mensagens do painel de registro: uma (ou mais, se passar de
-    20 cargos) mensagem por grupo — Cores, Verificação, Pings etc."""
+    20 cargos) mensagem por grupo — Cores, Verificação, Pings etc.
+
+    Além dos IDs salvos em config, o Drax também varre o histórico do canal procurando
+    mensagens dele mesmo cujo embed já tenha o título esperado (ex: "🐕🐕🐕 Pings"). Isso
+    garante que NUNCA cria mensagens novas se já existir uma pro mesmo grupo — mesmo que
+    o arquivo de configuração seja perdido (ex: reinício/redeploy sem volume persistente
+    no Railway) — e ainda apaga qualquer duplicata que tenha sobrado de reinícios antigos."""
     if canal is None:
         print("⚠️ Canal de registro não encontrado. Confira o ID configurado (/ver-configuracao) e o acesso do Drax a ele.")
         return
@@ -400,24 +406,66 @@ async def sincronizar_paineis_registro(canal: Optional[discord.TextChannel], rec
     await garantir_todos_cargos_registro(canal.guild)
 
     grupos = agrupar_cargos(list(config["cargos_registro"].items()))
-    ids_atuais = [] if recriar else list(config.get("mensagens_registro", []))
-    novas_ids = []
-    cursor = 0
-    primeiro_bloco_geral = True
 
+    blocos_por_grupo = {}
+    titulos_esperados = set()
     for nome_grupo, itens in grupos.items():
         blocos = dividir_em_blocos(itens)
-        for indice, bloco in enumerate(blocos):
-            embed = montar_embed_registro(canal.guild, nome_grupo, bloco, indice, len(blocos), primeiro_bloco_geral)
-            primeiro_bloco_geral = False
+        blocos_por_grupo[nome_grupo] = blocos
+        total = len(blocos)
+        for indice in range(total):
+            titulo = f"🐕🐕🐕 {nome_grupo}" + (f" (parte {indice + 1})" if total > 1 else "")
+            titulos_esperados.add(titulo)
 
-            if cursor < len(ids_atuais):
+    mensagens_por_titulo: dict = {}
+
+    if not recriar:
+        # 1) caminho rápido: tenta pelos IDs salvos em config
+        for msg_id in config.get("mensagens_registro", []):
+            try:
+                msg = await canal.fetch_message(msg_id)
+                if msg.embeds and msg.embeds[0].title in titulos_esperados:
+                    mensagens_por_titulo.setdefault(msg.embeds[0].title, msg)
+            except discord.NotFound:
+                continue
+
+        # 2) rede de segurança: varre o histórico por título. Cobre tanto o caso de IDs
+        # perdidos (config resetado) quanto duplicatas deixadas por reinícios anteriores
+        # (essas duplicatas extras são apagadas na hora).
+        try:
+            async for msg in canal.history(limit=200):
+                if msg.author != bot.user or not msg.embeds:
+                    continue
+                titulo_msg = msg.embeds[0].title
+                if titulo_msg not in titulos_esperados:
+                    continue
+                if titulo_msg in mensagens_por_titulo:
+                    if mensagens_por_titulo[titulo_msg].id != msg.id:
+                        try:
+                            await msg.delete()
+                        except discord.NotFound:
+                            pass
+                else:
+                    mensagens_por_titulo[titulo_msg] = msg
+        except discord.Forbidden:
+            print(f"⚠️ Sem permissão pra ler o histórico de #{canal.name}. Dê 'Ver Histórico de Mensagens' ao Drax.")
+
+    novas_ids = []
+    primeiro_bloco_geral = True
+
+    for nome_grupo, blocos in blocos_por_grupo.items():
+        total = len(blocos)
+        for indice, bloco in enumerate(blocos):
+            embed = montar_embed_registro(canal.guild, nome_grupo, bloco, indice, total, primeiro_bloco_geral)
+            primeiro_bloco_geral = False
+            titulo = embed.title
+
+            msg_existente = mensagens_por_titulo.pop(titulo, None)
+            if msg_existente is not None:
                 try:
-                    msg = await canal.fetch_message(ids_atuais[cursor])
-                    await msg.edit(embed=embed)
-                    await sincronizar_reacoes(msg, bloco)
-                    novas_ids.append(msg.id)
-                    cursor += 1
+                    await msg_existente.edit(embed=embed)
+                    await sincronizar_reacoes(msg_existente, bloco)
+                    novas_ids.append(msg_existente.id)
                     continue
                 except discord.NotFound:
                     pass
@@ -425,13 +473,11 @@ async def sincronizar_paineis_registro(canal: Optional[discord.TextChannel], rec
             msg = await canal.send(embed=embed)
             await sincronizar_reacoes(msg, bloco)
             novas_ids.append(msg.id)
-            cursor += 1
 
-    # apaga mensagens antigas que sobraram (ex: cargos foram removidos e agora precisa de menos partes)
-    for id_sobrando in ids_atuais[cursor:]:
+    # apaga mensagens de grupos que não existem mais (ex: um cargo removido esvaziou o grupo)
+    for msg_sobrando in mensagens_por_titulo.values():
         try:
-            msg_antiga = await canal.fetch_message(id_sobrando)
-            await msg_antiga.delete()
+            await msg_sobrando.delete()
         except discord.NotFound:
             pass
 
