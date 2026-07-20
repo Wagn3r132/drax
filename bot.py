@@ -2,13 +2,49 @@
 🐕🐕🐕 Drax — Bot Cérbero fofo para Discord (arquivo único, com configuração persistente)
 
 Requisitos:
-    pip install discord.py python-dotenv
+    pip install discord.py python-dotenv PyNaCl
+
+    (o PyNaCl é necessário pro Drax conseguir ENTRAR em call — ele faz isso pra
+    conseguir detectar efeitos de voz usados. Sem o PyNaCl instalado, os logs de
+    entrada/saída/troca de call continuam funcionando normalmente, só o log de
+    "usou efeito" que não funciona.)
 
 Configuração (.env na mesma pasta):
     DISCORD_TOKEN=seu_token_aqui
 
 Uso:
     python drax.py
+
+--------------------------------------------------------------------------
+LOGS (canais fixos, não precisa configurar nada)
+--------------------------------------------------------------------------
+Dois canais de log ficam com o ID fixo no código (procure por CANAL_LOGS_CHAT_ID
+e CANAL_LOGS_CALL_ID mais abaixo se precisar trocar):
+
+📋 Logs de chat (1528866964171260005)
+    - Mensagem apagada: mostra autor, canal, conteúdo antes de sumir, anexos, e
+      quem apagou (o próprio autor OU um moderador — descoberto pelo Registro de
+      Auditoria; se apagou o próprio, aparece "o próprio autor").
+    - Mensagem editada: mostra antes/depois do texto e link direto pra mensagem.
+    - Apagão em massa (bulk delete): mostra quantas mensagens e quem eram os
+      autores (só das que estavam em cache).
+    - Precisa da permissão "Ver Registro de Auditoria" pro Drax pra conseguir
+      identificar QUEM apagou a mensagem de outra pessoa (sem essa permissão,
+      ele ainda loga a mensagem apagada, só não sabe dizer quem apagou).
+
+🔊 Logs de call (1528867083000217754)
+    - Entrou / saiu / trocou de call.
+    - Foi puxado(a) (movido) pra outra call: mostra quem moveu (via Registro de
+      Auditoria — precisa da permissão "Ver Registro de Auditoria").
+    - Foi desconectado(a) da call: mostra quem desconectou, também via Registro
+      de Auditoria.
+    - Usou efeito de voz (reação animada ou som do soundboard): AVISO — o
+      Discord só manda esse evento pro bot na call em que ELE MESMO estiver
+      conectado (não dá pra "ouvir" todas as calls de fora). Por isso o Drax
+      entra sozinho, mudo e surdo, na call que tiver mais gente no momento, e
+      pula pra outra call se ela ficar vazia e outra tiver mais gente. Se tiver
+      mais de uma call ativa ao mesmo tempo, só a que ele estiver dentro tem os
+      efeitos registrados — é uma limitação da própria API do Discord.
 
 --------------------------------------------------------------------------
 ATUALIZAÇÃO AUTOMÁTICA (a cada 1 minuto, sem precisar reiniciar)
@@ -225,6 +261,11 @@ if not os.getenv("RAILWAY_VOLUME_MOUNT_PATH"):
 # Cor lateral dos embeds (tema "fogo do submundo")
 COR_EMBED = 0xFF6A00
 
+# Canais de log (fixos — não vêm do config.json de propósito, pra não sumir/mudar
+# sem querer). Se precisar trocar, é só editar os números aqui.
+CANAL_LOGS_CHAT_ID = 1528866964171260005
+CANAL_LOGS_CALL_ID = 1528867083000217754
+
 logging.basicConfig(level=logging.INFO)
 
 # ============================================================
@@ -232,7 +273,8 @@ logging.basicConfig(level=logging.INFO)
 # ============================================================
 intents = discord.Intents.default()
 intents.members = True          # necessário para on_member_join / on_member_remove
-intents.message_content = True  # útil caso queira comandos de prefixo no futuro
+intents.message_content = True  # necessário pra logar o conteúdo de mensagens editadas/apagadas
+intents.voice_states = True     # necessário pros logs de call (entrar/sair/trocar/efeitos)
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
@@ -388,6 +430,172 @@ async def sincronizar_reacoes(mensagem: discord.Message, bloco: list):
                 await mensagem.add_reaction(emoji)
             except discord.HTTPException as e:
                 print(f"⚠️ Não consegui reagir com {emoji}: {e}")
+
+
+# ============================================================
+# LOGS DE CHAT — mensagens apagadas e editadas
+# ============================================================
+LIMITE_TEXTO_LOG = 1000  # margem de segurança (limite real de um campo de embed é 1024)
+
+
+def _cortar_para_log(texto: Optional[str], limite: int = LIMITE_TEXTO_LOG) -> str:
+    if not texto:
+        return "*(sem texto — deve ser só imagem/anexo/embed/sticker)*"
+    texto = texto.strip()
+    if len(texto) > limite:
+        return texto[:limite] + "…"
+    return texto
+
+
+async def _quem_apagou_mensagem(guild: Optional[discord.Guild], autor_id: int, canal_id: int) -> str:
+    """Descobre quem apagou a mensagem, olhando o Registro de Auditoria: apagar a
+    PRÓPRIA mensagem não gera entrada nenhuma lá, então se não achar nada recente
+    pra esse autor é porque foi ele mesmo quem apagou."""
+    if guild is None:
+        return "❓ desconhecido"
+    if guild.me is None or not guild.me.guild_permissions.view_audit_log:
+        return "❓ não sei dizer (falta a permissão 'Ver Registro de Auditoria' pro Drax)"
+
+    agora = discord.utils.utcnow()
+    try:
+        async for entrada in guild.audit_logs(limit=10, action=discord.AuditLogAction.message_delete):
+            if (agora - entrada.created_at).total_seconds() > 10:
+                break  # o audit log vem do mais recente pro mais antigo
+            if entrada.target and entrada.target.id == autor_id:
+                canal_extra = getattr(entrada.extra, "channel", None)
+                if canal_extra is None or canal_extra.id == canal_id:
+                    return f"{entrada.user.mention} (moderação)" if entrada.user else "um moderador"
+    except discord.Forbidden:
+        return "❓ não sei dizer (falta a permissão 'Ver Registro de Auditoria' pro Drax)"
+
+    return "o próprio autor"
+
+
+@bot.event
+async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
+    if payload.guild_id is None:
+        return
+    canal_logs = bot.get_channel(CANAL_LOGS_CHAT_ID)
+    if canal_logs is None:
+        return
+
+    msg = payload.cached_message
+    if msg is not None and msg.author.bot:
+        return
+
+    canal_original = bot.get_channel(payload.channel_id)
+    canal_txt = canal_original.mention if canal_original else f"`#{payload.channel_id}`"
+
+    embed = discord.Embed(title="🗑️ Mensagem apagada", color=discord.Color.red(), timestamp=discord.utils.utcnow())
+    embed.add_field(name="Canal", value=canal_txt, inline=True)
+
+    if msg is not None:
+        guild = bot.get_guild(payload.guild_id)
+        apagado_por = await _quem_apagou_mensagem(guild, msg.author.id, payload.channel_id)
+
+        embed.set_author(name=str(msg.author), icon_url=msg.author.display_avatar.url)
+        embed.add_field(name="Autor", value=msg.author.mention, inline=True)
+        embed.add_field(name="Apagado por", value=apagado_por, inline=True)
+        embed.add_field(name="Conteúdo", value=_cortar_para_log(msg.content), inline=False)
+        if msg.attachments:
+            anexos = "\n".join(f"📎 {a.filename}" for a in msg.attachments)
+            embed.add_field(name="Anexos", value=_cortar_para_log(anexos, 500), inline=False)
+        embed.set_footer(text=f"ID da mensagem: {payload.message_id} • ID do autor: {msg.author.id}")
+    else:
+        embed.add_field(
+            name="Conteúdo",
+            value="*(não sei dizer — a mensagem não estava em cache; provavelmente era antiga ou o bot reiniciou depois que ela foi enviada)*",
+            inline=False,
+        )
+        embed.set_footer(text=f"ID da mensagem: {payload.message_id}")
+
+    await canal_logs.send(embed=embed)
+
+
+@bot.event
+async def on_raw_bulk_message_delete(payload: discord.RawBulkMessageDeleteEvent):
+    if payload.guild_id is None:
+        return
+    canal_logs = bot.get_channel(CANAL_LOGS_CHAT_ID)
+    if canal_logs is None:
+        return
+
+    canal_original = bot.get_channel(payload.channel_id)
+    canal_txt = canal_original.mention if canal_original else f"`#{payload.channel_id}`"
+
+    embed = discord.Embed(
+        title="🧹 Mensagens apagadas em massa",
+        description=f"**{len(payload.message_ids)}** mensagens apagadas de uma vez em {canal_txt}.",
+        color=discord.Color.dark_red(),
+        timestamp=discord.utils.utcnow(),
+    )
+
+    mensagens_em_cache = [m for m in payload.cached_messages if not m.author.bot]
+    if mensagens_em_cache:
+        contagem: dict = {}
+        for m in mensagens_em_cache:
+            contagem[str(m.author)] = contagem.get(str(m.author), 0) + 1
+        resumo = "\n".join(f"• {autor}: {qtd}" for autor, qtd in contagem.items())
+        embed.add_field(
+            name=f"Autores (de {len(mensagens_em_cache)} mensagens que estavam em cache)",
+            value=_cortar_para_log(resumo, 800),
+            inline=False,
+        )
+
+    await canal_logs.send(embed=embed)
+
+
+@bot.event
+async def on_raw_message_edit(payload: discord.RawMessageUpdateEvent):
+    if payload.guild_id is None:
+        return
+
+    novo_conteudo = payload.data.get("content")
+    if novo_conteudo is None:
+        return  # edição de outra coisa (embed de link, etc.), não do texto em si
+
+    antes = payload.cached_message
+    if antes is not None:
+        if antes.author.bot:
+            return
+        if antes.content == novo_conteudo:
+            return  # sem mudança real de texto
+
+    canal_original = bot.get_channel(payload.channel_id)
+    if canal_original is None:
+        return
+
+    autor = antes.author if antes is not None else None
+    if autor is None:
+        try:
+            msg_atual = await canal_original.fetch_message(payload.message_id)
+            autor = msg_atual.author
+        except (discord.NotFound, discord.Forbidden):
+            autor = None
+    if autor is not None and autor.bot:
+        return
+
+    canal_logs = bot.get_channel(CANAL_LOGS_CHAT_ID)
+    if canal_logs is None:
+        return
+
+    link = f"https://discord.com/channels/{payload.guild_id}/{payload.channel_id}/{payload.message_id}"
+
+    embed = discord.Embed(title="📝 Mensagem editada", color=discord.Color.orange(), timestamp=discord.utils.utcnow())
+    embed.add_field(name="Canal", value=canal_original.mention, inline=True)
+    if autor is not None:
+        embed.set_author(name=str(autor), icon_url=autor.display_avatar.url)
+        embed.add_field(name="Autor", value=autor.mention, inline=True)
+    embed.add_field(
+        name="Antes",
+        value=_cortar_para_log(antes.content) if antes is not None else "*(não sei — mensagem não estava em cache)*",
+        inline=False,
+    )
+    embed.add_field(name="Depois", value=_cortar_para_log(novo_conteudo), inline=False)
+    embed.add_field(name="Link", value=f"[Ir para a mensagem]({link})", inline=False)
+    embed.set_footer(text=f"ID da mensagem: {payload.message_id}")
+
+    await canal_logs.send(embed=embed)
 
 
 async def sincronizar_paineis_registro(canal: Optional[discord.TextChannel], recriar: bool = False):
@@ -603,6 +811,154 @@ async def on_member_remove(member: discord.Member):
         embed.set_thumbnail(url=member.display_avatar.url)
 
     await canal.send(embed=embed)
+
+
+# ============================================================
+# LOGS DE CALL — entrou/saiu/trocou/puxão/efeito de voz
+# ============================================================
+JANELA_AUDIT_LOG_SEGUNDOS = 8  # quão "recente" uma entrada do audit log precisa ser pra contar
+
+
+async def _quem_moveu_para(guild: discord.Guild, canal_destino_id: int):
+    """Procura no Registro de Auditoria quem usou 'mover membro' pra esse canal
+    recentemente. O Discord não guarda QUAL membro específico foi movido quando
+    são vários de uma vez (só o total), então em caso de mais de 1 pessoa movida
+    junto isso é reportado, mas sem certeza absoluta de qual delas é o alvo."""
+    if guild.me is None or not guild.me.guild_permissions.view_audit_log:
+        return None
+    agora = discord.utils.utcnow()
+    try:
+        async for entrada in guild.audit_logs(limit=5, action=discord.AuditLogAction.member_move):
+            if (agora - entrada.created_at).total_seconds() > JANELA_AUDIT_LOG_SEGUNDOS:
+                break
+            canal_extra = getattr(entrada.extra, "channel", None)
+            if canal_extra is not None and canal_extra.id == canal_destino_id:
+                return entrada
+    except discord.Forbidden:
+        return None
+    return None
+
+
+async def _quem_desconectou(guild: discord.Guild):
+    """Mesma ideia, mas pra quem foi desconectado da call inteira (não só movido
+    de canal). O audit log de 'Disconnect' também não amarra num membro específico."""
+    if guild.me is None or not guild.me.guild_permissions.view_audit_log:
+        return None
+    agora = discord.utils.utcnow()
+    try:
+        async for entrada in guild.audit_logs(limit=5, action=discord.AuditLogAction.member_disconnect):
+            if (agora - entrada.created_at).total_seconds() > JANELA_AUDIT_LOG_SEGUNDOS:
+                break
+            return entrada
+    except discord.Forbidden:
+        return None
+    return None
+
+
+async def _gerenciar_presenca_para_efeitos(guild: discord.Guild):
+    """O Discord só manda o evento de 'efeito de voz' (reação animada / som do
+    soundboard) pro bot que estiver DENTRO da call — não dá pra detectar de fora.
+    Por isso o Drax entra sozinho (mudo e surdo) na call com mais gente agora, e
+    sai/pula de canal conforme as calls esvaziam ou enchem.
+
+    LIMITAÇÃO: um bot só fica em 1 call por servidor de cada vez, então se tiver
+    mais de uma call ativa ao mesmo tempo, só os efeitos usados na call em que o
+    Drax está entram no log — as outras calls simultâneas ficam de fora."""
+    voice_client = guild.voice_client
+
+    melhor_canal, melhor_contagem = None, 0
+    for canal in guild.voice_channels:
+        humanos = sum(1 for m in canal.members if not m.bot)
+        if humanos > melhor_contagem:
+            melhor_canal, melhor_contagem = canal, humanos
+
+    if melhor_canal is None:
+        if voice_client is not None:
+            await voice_client.disconnect(force=True)
+        return
+
+    if voice_client is None:
+        try:
+            await melhor_canal.connect(self_mute=True, self_deaf=True)
+        except discord.ClientException as e:
+            # geralmente falta instalar o PyNaCl ("pip install PyNaCl")
+            print(f"⚠️ Não consegui entrar em call pra monitorar efeitos de voz: {e}")
+        except discord.Forbidden:
+            print(f"⚠️ Sem permissão pra entrar em #{melhor_canal.name} pra monitorar efeitos de voz.")
+    elif voice_client.channel.id != melhor_canal.id:
+        try:
+            await voice_client.move_to(melhor_canal)
+        except discord.HTTPException:
+            pass
+
+
+@bot.event
+async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+    if before.channel == after.channel:
+        return  # só mudou mute/deaf/câmera/stream — não é entrada/saída/troca de call
+
+    if not member.bot:
+        canal_logs = bot.get_channel(CANAL_LOGS_CALL_ID)
+        if canal_logs is not None:
+            if before.channel is None and after.channel is not None:
+                embed = discord.Embed(title="🔊 Entrou na call", color=discord.Color.green(), timestamp=discord.utils.utcnow())
+                embed.set_author(name=str(member), icon_url=member.display_avatar.url)
+                embed.add_field(name="Membro", value=member.mention, inline=True)
+                embed.add_field(name="Canal", value=after.channel.mention, inline=True)
+                await canal_logs.send(embed=embed)
+
+            elif before.channel is not None and after.channel is None:
+                entrada = await _quem_desconectou(member.guild)
+                if entrada is not None:
+                    extra = f" (desconectou {entrada.extra.count} pessoa(s) de uma vez)" if entrada.extra.count > 1 else ""
+                    embed = discord.Embed(title="👢 Foi desconectado(a) da call", color=discord.Color.dark_orange(), timestamp=discord.utils.utcnow())
+                    embed.add_field(name="Por", value=f"{entrada.user.mention if entrada.user else 'desconhecido'}{extra}", inline=False)
+                else:
+                    embed = discord.Embed(title="🔇 Saiu da call", color=discord.Color.greyple(), timestamp=discord.utils.utcnow())
+                embed.set_author(name=str(member), icon_url=member.display_avatar.url)
+                embed.add_field(name="Membro", value=member.mention, inline=True)
+                embed.add_field(name="Canal", value=before.channel.mention, inline=True)
+                await canal_logs.send(embed=embed)
+
+            else:  # trocou de canal de voz
+                entrada = await _quem_moveu_para(member.guild, after.channel.id)
+                if entrada is not None:
+                    extra = f" (moveu {entrada.extra.count} pessoa(s) de uma vez)" if entrada.extra.count > 1 else ""
+                    embed = discord.Embed(title="🫳 Foi puxado(a) para outra call", color=discord.Color.gold(), timestamp=discord.utils.utcnow())
+                    embed.add_field(name="Por", value=f"{entrada.user.mention if entrada.user else 'desconhecido'}{extra}", inline=False)
+                else:
+                    embed = discord.Embed(title="🔀 Trocou de call", color=discord.Color.blue(), timestamp=discord.utils.utcnow())
+                embed.set_author(name=str(member), icon_url=member.display_avatar.url)
+                embed.add_field(name="Membro", value=member.mention, inline=True)
+                embed.add_field(name="De", value=before.channel.mention, inline=True)
+                embed.add_field(name="Para", value=after.channel.mention, inline=True)
+                await canal_logs.send(embed=embed)
+
+    await _gerenciar_presenca_para_efeitos(member.guild)
+
+
+@bot.event
+async def on_voice_channel_effect(effect: discord.VoiceChannelEffect):
+    if effect.user is None or effect.user.bot:
+        return
+    canal_logs = bot.get_channel(CANAL_LOGS_CALL_ID)
+    if canal_logs is None:
+        return
+
+    embed = discord.Embed(title="✨ Usou um efeito na call", color=discord.Color.fuchsia(), timestamp=discord.utils.utcnow())
+    embed.set_author(name=str(effect.user), icon_url=effect.user.display_avatar.url)
+    embed.add_field(name="Membro", value=effect.user.mention, inline=True)
+    embed.add_field(name="Canal", value=effect.channel.mention, inline=True)
+
+    if effect.is_sound():
+        volume_pct = int((effect.sound.volume or 0) * 100)
+        embed.add_field(name="Tipo", value=f"🔊 Som do soundboard (ID `{effect.sound.id}`, volume {volume_pct}%)", inline=False)
+    elif effect.emoji is not None:
+        embed.add_field(name="Tipo", value=f"Reação animada com {effect.emoji}", inline=False)
+    else:
+        embed.add_field(name="Tipo", value="Efeito desconhecido", inline=False)
+
+    await canal_logs.send(embed=embed)
 
 
 # ============================================================
